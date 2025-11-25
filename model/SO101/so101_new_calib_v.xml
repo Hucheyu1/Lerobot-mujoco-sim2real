@@ -6,7 +6,8 @@
   <default>
     <default class="so101_new_calib">
       <joint damping="1" frictionloss="0.1" armature="0.005"/>
-      <position kp="50"/>
+      <!-- <position kp="50"/> -->
+      <position kp="50" dampratio="1"/>
       <default class="visual">
         <geom type="mesh" contype="0" conaffinity="0" group="2"/>
       </default>
@@ -20,8 +21,8 @@
     <default class="sts3215">
       <geom contype="0" conaffinity="0"/>
       <joint damping="0.60" frictionloss="0.052" armature="0.028"/>
-      <!-- For lerobot this are not exactly the motor params as the Kp and Kd not map 1-to-1 thus motor idendification with lerobot Kp=16 and Kd=32 should actually be done -->
-      <position kp="17.8"/>
+      <general dyntype="integrator" biastype="affine" gainprm="50" biasprm="0 -50 0"/>
+
     </default>
     <default class="backlash">
       <!-- +/- 0.5° of backlash -->
@@ -124,9 +125,7 @@
   </worldbody>
 
  <keyframe>
-    
-    <key name="home" ctrl="-0.04137 -1.68611 1.69453 0.5 0.01833 0"/>
-    
+    <key name="home" qpos="-0.04137 -1.68611 1.69453 0.5 0.01833 0" ctrl="0 0 0 0 0 0"/>
   </keyframe>
 
   <asset>
@@ -158,12 +157,13 @@
     <material name="moving_jaw_so101_v1_material" rgba="1 0.82 0.12 1"/>
   </asset>
   <actuator>
-    <position class="sts3215" name="shoulder_pan" joint="shoulder_pan" forcerange="-3.35 3.35" ctrlrange="-1.91986 1.91986"/>
-    <position class="sts3215" name="shoulder_lift" joint="shoulder_lift" forcerange="-3.35 3.35" ctrlrange="-1.74533 1.74533"/>
-    <position class="sts3215" name="elbow_flex" joint="elbow_flex" forcerange="-3.35 3.35" ctrlrange="-1.69 1.69"/>
-    <position class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.35 3.35" ctrlrange="-1.65806 1.65806"/>
-    <position class="sts3215" name="wrist_roll" joint="wrist_roll" forcerange="-3.35 3.35" ctrlrange="-2.74385 2.84121"/>
-    <position class="sts3215" name="gripper" joint="gripper" forcerange="-3.35 3.35" ctrlrange="-0.17453 1.74533"/>
+    <!-- 测试扭矩影响 -->
+    <general  class="sts3215" name="shoulder_pan" joint="shoulder_pan" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <general  class="sts3215" name="shoulder_lift" joint="shoulder_lift" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <general  class="sts3215" name="elbow_flex" joint="elbow_flex" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <general  class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <general  class="sts3215" name="wrist_roll" joint="wrist_roll" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <general  class="sts3215" name="gripper" joint="gripper" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
   </actuator>
   <equality/>
 </mujoco>

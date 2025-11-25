@@ -1,4 +1,4 @@
-import mujoco
+import os
 import time
 import mujoco_viewer
 import numpy as np
@@ -111,16 +111,18 @@ class Test(mujoco_viewer.CustomViewer):
         
         # 使用通信器发送数据
         self.communicator.send_data(q_real_target_deg)
-        time.sleep(0.01)  # 控制发送频率
+        # time.sleep(0.01)  # 控制发送频率
 
 
 if __name__ == "__main__":
     # 4. 显式创建使用 TCP 地址的通信器实例
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
-    
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_script_dir)
+    xml_path = os.path.join(project_root, "model", "SO101", "scene_with_table.xml")
     try:
         # 将通信器实例传入Test类
-        test = Test("./model/SO101/scene.xml", zmq_communicator)
+        test = Test(xml_path, zmq_communicator)
         test.run_loop()
     except KeyboardInterrupt:
         print("仿真程序被用户中断")
