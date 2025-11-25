@@ -88,41 +88,47 @@ class ZMQCommunicator:
 
 
 class Test(mujoco_viewer.CustomViewer):
-    def __init__(self, path, communicator):
+    def __init__(self, path, communicator, control_mode):
         super().__init__(path, 1.5, azimuth=135, elevation=-30)
         self.path = path
         self.communicator = communicator
+        self.control_mode = control_mode
 
     def runBefore(self):
         pass
     
     def runFunc(self):
-        # 获取仿真中的前6个关节的角度（弧度）
-        sim_joint_rad = self.data.qpos[:6].copy()
-        # 将弧度转换为角度
-        sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]
-        # b. 将 MuJoCo 角度转换为真实机器人指令
-        q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
+        # --- 代码：重力补偿 ---
+        # `data.qfrc_bias` 存储了由重力、科里奥利力等产生的偏置力矩。
+        # 对于静止或慢速运动的机器人，它主要就是重力力矩
+        self.data.qfrc_applied[:] =  self.data.qfrc_bias[:]
+        if self.control_mode == 'position':
+            # 获取仿真中的前6个关节的角度（弧度）
+            sim_joint_rad = self.data.ctrl[:6].copy()
+            # 将弧度转换为角度
+            sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]
+            # b. 将 MuJoCo 角度转换为真实机器人指令
+            q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
+            # 使用通信器发送数据
+            self.communicator.send_data(q_real_target_deg)
+        else:
+            target_velocities_rad_s = self.data.ctrl[:6].copy()
+            target_velocities_deg = [math.degrees(q) for q in target_velocities_rad_s]
+            self.communicator.send_data(target_velocities_deg)
 
-        # c. 构建发送给真实机器人的动作字典
-        # action_to_send = {
-        #     f"{name}.pos": angle for name, angle in zip(JOINT_NAMES, q_real_target_deg)
-        # }
-        
-        # 使用通信器发送数据
-        self.communicator.send_data(q_real_target_deg)
         # time.sleep(0.01)  # 控制发送频率
 
 
 if __name__ == "__main__":
     # 4. 显式创建使用 TCP 地址的通信器实例
+    control_mode = 'velocity'  # 'position': 位置控制  'velocity': 速度控制
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_script_dir)
-    xml_path = os.path.join(project_root, "model", "SO101", "scene_with_table.xml")
+    xml_path = os.path.join(project_root, "model", "SO101", "scene_with_table.xml" if control_mode == 'position' else "scene_with_table_v.xml")
     try:
         # 将通信器实例传入Test类
-        test = Test(xml_path, zmq_communicator)
+        test = Test(xml_path, zmq_communicator, control_mode)
         test.run_loop()
     except KeyboardInterrupt:
         print("仿真程序被用户中断")

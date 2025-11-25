@@ -100,7 +100,10 @@ class Test(mujoco_viewer.CustomViewer):
         """
         每一帧都会被调用的函数
         """
-
+        # --- 代码：重力补偿 ---
+        # `data.qfrc_bias` 存储了由重力、科里奥利力等产生的偏置力矩。
+        # 对于静止或慢速运动的机器人，它主要就是重力力矩
+        self.data.qfrc_applied[:] =  self.data.qfrc_bias[:]
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
         if self.traj_index < self.total_frames:

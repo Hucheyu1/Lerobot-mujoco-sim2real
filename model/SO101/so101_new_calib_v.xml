@@ -21,7 +21,7 @@
     <default class="sts3215">
       <geom contype="0" conaffinity="0"/>
       <joint damping="0.60" frictionloss="0.052" armature="0.028"/>
-      <general dyntype="integrator" biastype="affine" gainprm="50" biasprm="0 -50 0"/>
+      <velocity kv="25"/>
 
     </default>
     <default class="backlash">
@@ -157,13 +157,12 @@
     <material name="moving_jaw_so101_v1_material" rgba="1 0.82 0.12 1"/>
   </asset>
   <actuator>
-    <!-- 测试扭矩影响 -->
-    <general  class="sts3215" name="shoulder_pan" joint="shoulder_pan" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
-    <general  class="sts3215" name="shoulder_lift" joint="shoulder_lift" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
-    <general  class="sts3215" name="elbow_flex" joint="elbow_flex" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
-    <general  class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
-    <general  class="sts3215" name="wrist_roll" joint="wrist_roll" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
-    <general  class="sts3215" name="gripper" joint="gripper" forcerange="-3.35 3.35" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="shoulder_pan" joint="shoulder_pan"  forcerange="-3.5 3.5" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="shoulder_lift" joint="shoulder_lift"  forcerange="-3.5 3.5" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="elbow_flex" joint="elbow_flex"  forcerange="-3.5 3.5" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="wrist_flex" joint="wrist_flex" forcerange="-3.5 3.5" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="wrist_roll" joint="wrist_roll"  forcerange="-3.5 3.5" ctrlrange="-2 2"/>
+    <velocity  class="sts3215" name="gripper" joint="gripper"  forcerange="-3.5 3.5" ctrlrange="-2 2"/>
   </actuator>
   <equality/>
 </mujoco>
