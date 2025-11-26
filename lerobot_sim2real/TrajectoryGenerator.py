@@ -17,7 +17,7 @@ class CartesianTrajectoryGenerator:
     本版本使用 dm_control.inverse_kinematics.qpos_from_site_pose 进行逆运动学求解。
     """
     def __init__(self, model_path: str, ee_site_name: str, num_joints: int, 
-                 idx=1, time_horizon=60, time_steps_per_sec=50):
+                 idx=1, time_horizon=60, time_steps_per_sec = 5):
         """
         初始化轨迹生成器。
 
@@ -32,8 +32,8 @@ class CartesianTrajectoryGenerator:
         # 轨迹参数
         self.idx = idx
         self.time_horizon = time_horizon
-        self.time_num = time_steps_per_sec
-        self.time_vector = np.linspace(0, self.time_horizon, 501)
+        self.time_steps = time_steps_per_sec * time_horizon
+        self.time_vector = np.linspace(0, self.time_horizon, self.time_steps)
         
         # 机器人和IK参数
         self.model_path = model_path
@@ -41,8 +41,6 @@ class CartesianTrajectoryGenerator:
         self.num_joints = num_joints
         
         # 这些参数可以根据您的机器人工作空间进行调整
-        self.x_offset = 0.15
-        self.z_base = 0.15
         self.traj_scale = 0.5
 
         # 初始化IK求解器所需的MuJoCo模型和数据
@@ -224,12 +222,16 @@ if __name__ == "__main__":
     MODEL_XML_PATH = os.path.join(project_root, "model", "SO101", "scene_with_table.xml")
     EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
     NUM_JOINTS = 5 # 你的机器人关节数量
+    draw_point = 300
 
     # 创建生成器实例
     traj_generator = CartesianTrajectoryGenerator(
         model_path=MODEL_XML_PATH,
         ee_site_name=EE_SITE_NAME,
-        num_joints=NUM_JOINTS
+        num_joints=NUM_JOINTS,
+        idx=1, 
+        time_horizon = 60, 
+        time_steps_per_sec = 5
     )
 
     # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
@@ -266,7 +268,7 @@ if __name__ == "__main__":
         
         # 自动计算采样步长：保证屏幕上最多只画 1000 个球，避免报错
         total_points = len(cartesian_points)
-        draw_step = max(1, total_points // 300) 
+        draw_step = max(1, total_points // draw_point) 
         print(f"轨迹点总数: {total_points}, 绘图采样步长: {draw_step}")
         # 2. 绘制轨迹 (应用采样)
         # 使用 [::draw_step] 进行切片

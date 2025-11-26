@@ -3,10 +3,11 @@
 <!-- Onshape https://cad.onshape.com/documents/7715cc284bb430fe6dab4ffd/w/4fd0791b683777b02f8d975a/e/826c553ede3b7592eb9ca800 -->
 <mujoco model="so101_new_calib">
   <compiler angle="radian" meshdir="assets" autolimits="true"/>
+
   <default>
+    <!-- 主默认类 -->
     <default class="so101_new_calib">
       <joint damping="1" frictionloss="0.1" armature="0.005"/>
-      <!-- <position kp="50"/> -->
       <position kp="50" dampratio="1"/>
       <default class="visual">
         <geom type="mesh" contype="0" conaffinity="0" group="2"/>
@@ -15,21 +16,19 @@
         <geom group="3"/>
       </default>
     </default>
-  </default>
-  <!-- Additional joints_properties.xml -->
-  <default>
+    <!-- STS3215 电机类 -->
     <default class="sts3215">
       <geom contype="0" conaffinity="0"/>
       <joint damping="0.60" frictionloss="0.052" armature="0.028"/>
-      <!-- For lerobot this are not exactly the motor params as the Kp and Kd not map 1-to-1 thus motor idendification with lerobot Kp=16 and Kd=32 should actually be done -->
-      <!-- <position kp="17.8"/> -->
       <position kp="50" dampratio="1"/>
     </default>
+    <!-- Backlash 类 -->
     <default class="backlash">
-      <!-- +/- 0.5° of backlash -->
-      <joint damping="0.01" frictionloss="0" armature="0.01" limited="true" range="-0.008726646259971648 0.008726646259971648"/>
+      <joint damping="0.01" frictionloss="0" armature="0.01" limited="true"
+            range="-0.008726646259971648 0.008726646259971648"/>
     </default>
   </default>
+
   <worldbody>
     <!-- Link base -->
     <body name="base" pos="0 0 0" quat="1 0 0 0" childclass="so101_new_calib">
@@ -125,7 +124,7 @@
     </body>
   </worldbody>
 
- <keyframe>
+  <keyframe>
     <key name="home" qpos="-0.04137 -1.68611 1.69453 0.5 0.01833 0" ctrl="-0.04137 -1.68611 1.69453 0.5 0.01833 0"/>
   </keyframe>
   
