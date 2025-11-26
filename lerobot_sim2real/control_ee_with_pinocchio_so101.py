@@ -344,20 +344,30 @@ if __name__ == "__main__":
         arm_model_path=ARM_XML_PATH,
         ee_site_name=EE_SITE_NAME,
         num_joints=NUM_JOINTS,
+        idx = 0,
         time_horizon=60,
         time_steps_per_sec=5
     )
     # --- 步骤 3: 一行代码生成所有轨迹数据 ---
-    # 定义目标姿态 (3x3 旋转矩阵)
-    # 示例：保持夹爪向前
+    # 角度（度）
+    angle_degrees = 90.0  # 0
+
+    # 转换为弧度
+    angle_radians = math.radians(angle_degrees)
+
+    # 计算 cos 和 sin 值
+    c = math.cos(angle_radians)
+    s = math.sin(angle_radians)
+
+    # 构建绕 X 轴旋转的矩阵
     target_orientation = np.array([
-        [1, 0, 0], 
-        [0, 1, 0], 
-        [0, 0, 1]
+        [1, 0, 0],
+        [0, c, -s],
+        [0, s, c]
     ])
     # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
     cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name='Fig8',
+        traj_name='Circle',  # Circle, Fig8
         target_orientation_matrix=target_orientation
     )
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
