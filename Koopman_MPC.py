@@ -1,11 +1,15 @@
 import mujoco
 import numpy as np
-import mujoco_viewer
-from TrajectoryGenerator import CartesianTrajectoryGenerator
-from so101_mujoco import ZMQCommunicator
+from utility.ZMQ import ZMQCommunicator
+from control.TrajectoryGenerator import CartesianTrajectoryGenerator
+from control.MPC_Controler import MPCController
 import time
-import os
 import math
+from args import Args
+import torch
+from SOARM101.SOARM101_Env import SOARM101Env
+
+from models.init_model import init_model
 # --- 修改后的主仿真类 ---
 joint_offsets = [
     0,    # - (Motor 1 position: +1.49)
@@ -13,15 +17,15 @@ joint_offsets = [
     0,     # - (Motor 3 position: +0.7)
     0,    # - (Motor 4 position: -41.31)
     0,      # - (Motor 5 position: -0.7)
-    -31.97     # - (Motor 6 position: +4.48)
+    -41.97     # - (Motor 6 position: +4.48) 
 ]
 
 def sim_to_real(q_sim_deg, offsets):
     """MuJoCo 角度 (度) -> 真实机器人指令角度 (度)"""
     return [sim - off for sim, off in zip(q_sim_deg, offsets)]
 
-class Test(mujoco_viewer.CustomViewer):
-    def __init__(self, path, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num):
+class Test:
+    def __init__(self, path, Controller, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num):
         """
         初始化参数
         :param path: XML 模型路径
@@ -30,15 +34,18 @@ class Test(mujoco_viewer.CustomViewer):
         :param joint_angle_traj: 关节空间轨迹 (N, num_joints)
         :param num_joints: 机器人的关节数量 (例如 5, 6, 7)
         """
-        # 调用父类构造函数 (根据你提供的基类签名)
-        super().__init__(path, 1.5, azimuth=135, elevation=-30)
         
         self.path = path
         self.communicator = communicator
-        
+        self.env = SOARM101Env(path, render_mode=True)
+        # 控制相关
+        self.mpc_controller = Controller
+        self.H = Controller.H
         # 保存轨迹数据
-        self.cartesian_points = cartesian_points
-        self.joint_angle_traj = joint_angle_traj
+        self.actual_traj = []
+        self.cartesian_points = cartesian_points # (N, 3)
+        self.joint_angle_traj = joint_angle_traj # (N, 5)
+        self.state_all_ref = np.hstack([cartesian_points, joint_angle_traj])
         self.num_joints = num_joints
         
         # 轨迹播放进度计数器
@@ -53,12 +60,13 @@ class Test(mujoco_viewer.CustomViewer):
         self.home_qpos = None
         try:
             # 1. 获取名为 "home" 的关键帧 ID
-            key_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "home")
+            key_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_KEY, "home")
             
             # 2. 如果 ID 有效 (>=0)，则读取对应的 qpos 数据
             if key_id >= 0:
                 # model.key_qpos 是一个 (nkey, nq) 的数组
-                self.home_qpos = self.model.key_qpos[key_id].copy()
+                self.home_qpos = self.env.model.key_qpos[key_id].copy()
+                self.home_ctrl = self.env.model.key_ctrl[key_id].copy()
                 print(f"已加载 'home' 姿态: {self.home_qpos}")
             else:
                 print("警告: XML中未找到名为 'home' 的 <keyframe>")
@@ -76,25 +84,26 @@ class Test(mujoco_viewer.CustomViewer):
         """
         # 将机器人复位到轨迹的起始位置
         if self.total_frames > 0:
-            self.data.qpos[:self.num_joints] = self.joint_angle_traj[0]
-            mujoco.mj_forward(self.model, self.data)
+            self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[0]
+            mujoco.mj_forward(self.env.model, self.env.data)
+            self.state_tensor = torch.DoubleTensor(self.state_all_ref[0]).unsqueeze(0)
         print("仿真即将开始...")
         # --- 1. 绘制静态轨迹 (红色小球) ---
         # 注意：必须每帧都画，因为 viewer.sync() 会清空 user_scn
         for pt in self.cartesian_points[::self.draw_step]:
             # 安全检查：如果 geometry 满了就不画了
-            if self.handle.user_scn.ngeom >= self.handle.user_scn.maxgeom:
+            if self.env.viewer.user_scn.ngeom >= self.env.viewer.user_scn.maxgeom:
                 break
             
             mujoco.mjv_initGeom(
-                self.handle.user_scn.geoms[self.handle.user_scn.ngeom],
+                self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                 type=mujoco.mjtGeom.mjGEOM_SPHERE,
                 size=[0.002, 0, 0],       # 2mm 红球
                 pos=pt,
                 mat=np.eye(3).flatten(),
                 rgba=[1, 0, 0, 0.3]       # 半透明红
             )
-            self.handle.user_scn.ngeom += 1
+            self.env.viewer.user_scn.ngeom += 1
 
     def runFunc(self):
         """
@@ -105,28 +114,28 @@ class Test(mujoco_viewer.CustomViewer):
         # 对于静止或慢速运动的机器人，它主要就是重力力矩
         step_start = time.time()
 
-        self.data.qfrc_applied[:] =  self.data.qfrc_bias[:]
+        self.env.data.qfrc_applied[:] =  self.env.data.qfrc_bias[:]
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
         if self.traj_index < self.total_frames:
-            # 设置当前帧的关节角度
-            self.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index]
-            
+
+            self.runMPC()
             # 前向动力学计算
-            mujoco.mj_forward(self.model, self.data)
+            mujoco.mj_forward(self.env.model, self.env.data)
             
             # 绘制当前目标点 (绿色大球)
-            current_pos = self.cartesian_points[self.traj_index]
-            if self.handle.user_scn.ngeom <= self.handle.user_scn.maxgeom:
+            # current_pos = self.cartesian_points[self.traj_index]
+            current_pos = self.actual_traj[self.traj_index][:3]
+            if self.env.viewer.user_scn.ngeom <= self.env.viewer.user_scn.maxgeom:
                 mujoco.mjv_initGeom(
-                    self.handle.user_scn.geoms[self.handle.user_scn.ngeom],
+                    self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                     type=mujoco.mjtGeom.mjGEOM_SPHERE,
                     size=[0.002, 0, 0],    # 1cm 绿球
                     pos=current_pos,
                     mat=np.eye(3).flatten(),
                     rgba=[0, 1, 0, 1]     # 不透明绿
                 )
-                self.handle.user_scn.ngeom += 1
+                self.env.viewer.user_scn.ngeom += 1
             
             # 进度 +1
             self.traj_index += 1
@@ -153,25 +162,26 @@ class Test(mujoco_viewer.CustomViewer):
 
         # --- 阶段 3: 播放回归轨迹 ---
         elif self.return_traj is not None and self.return_index < len(self.return_traj):
+            print("回归 Home...")
             # 设置回归过程中的关节角度
-            self.data.qpos[:self.num_joints] = self.return_traj[self.return_index]
-            mujoco.mj_forward(self.model, self.data)
-            
+            self.env.data.qpos[:self.num_joints] = self.return_traj[self.return_index]
+            mujoco.mj_forward(self.env.model, self.env.data)
             # 这里不再绘制绿球，因为已经在“回家”路上了
             self.return_index += 1
-
+            s_next , _, _, _, _ = self.env.step(self.home_ctrl) # (8,)
         # --- 阶段 4: 全部结束，保持 Home 姿态 ---
         else:
             if self.home_qpos is not None:
-                self.data.qpos[:self.num_joints] = self.home_qpos[:self.num_joints]
+                self.env.data.qpos[:self.num_joints] = self.home_qpos[:self.num_joints]
             else:
                 # 如果没有 home，就停在轨迹终点
-                self.data.qpos[:self.num_joints] = self.joint_angle_traj[-1]
+                self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[-1]
                 
-            mujoco.mj_forward(self.model, self.data)
+            mujoco.mj_forward(self.env.model, self.env.data)
+            s_next , _, _, _, _ = self.env.step(self.home_ctrl) # (8,)
 
         # --- 3. 通信器逻辑 (保留你的原始逻辑) ---
-        sim_joint_rad = self.data.qpos[:6].copy() # 注意：如果是纯位置回放，ctrl可能为0，除非你在别处设置了
+        sim_joint_rad = self.env.data.qpos[:6].copy() 
         # 将弧度转换为角度
         sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]        
         q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
@@ -181,15 +191,49 @@ class Test(mujoco_viewer.CustomViewer):
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
         # time.sleep(0.01)  # 控制发送频
+    
+    def runMPC(self):
+        # --- 2. MPC 控制计算 ---
+        ref_traj_segment = self.state_all_ref[self.traj_index + 1 : self.traj_index + self.H + 1]
+        if self.mpc_controller.state_full:
+            lifted_ref = np.zeros((self.H, self.mpc_controller.Nkoopman))
+            for i in range(len(ref_traj_segment)):
+                lifted_ref[i] = self.mpc_controller.Psi_o(torch.DoubleTensor(ref_traj_segment[i]).unsqueeze(0)).flatten() 
+            ref_flat = lifted_ref.flatten().reshape(-1, 1)
+        else:  
+            ref_flat = ref_traj_segment.flatten().reshape(-1, 1)
+
+        z0 = self.mpc_controller.Psi_o(self.state_tensor) # (32,1)
+        
+        if self.mpc_controller.args.MPC_type == 'mpc':
+            p = np.vstack([ref_flat, z0.reshape(-1, 1)])
+        if self.mpc_controller.args.MPC_type == 'delta_mpc':
+            p = np.vstack([ref_flat, z0.reshape(-1, 1), self.mpc_controller.u_prev.reshape(-1, 1)])
+
+        # b. 计算控制输入
+        u, a = self.mpc_controller.get_control(p)
+        self.mpc_controller.u_prev = u # 保存当前控制以备下次使用
+
+        # --- 3. 应用控制并步进仿真 ---
+        s_next , _, _, _, _ = self.env.step(a) # (8,)
+        self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8)
+        self.actual_traj.append(self.state_tensor.detach().cpu().numpy().reshape(-1))
+ 
+    def is_running(self):
+        return self.env.viewer.is_running()
+    
+    def run_loop(self):
+        self.runBefore()
+        while self.is_running():
+            self.runFunc()
 
 if __name__ == "__main__":
     # --- 0. 基本配置 ---
     # 示例参数，请替换为您自己的模型信息
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_script_dir)
-    MODEL_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml")
+    args = Args()
+    MODEL_XML_PATH = args.xml_path
     EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
-    NUM_JOINTS = 5 # 你的机器人关节数量
+    NUM_JOINTS = args.u_dim # 你的机器人关节数量
 
     # 创建生成器实例
     traj_generator = CartesianTrajectoryGenerator(
@@ -212,10 +256,17 @@ if __name__ == "__main__":
     )
     
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
+    model = init_model(args)
+    model.double()
+    load_model_path = args.output_dir + "/best_model.pt"
+    model.load_state_dict(torch.load(load_model_path))
+    MPC_Controller = MPCController(model, args)
+
     try:
         # 实例化播放器
         test = Test(
             path=MODEL_XML_PATH,
+            Controller = MPC_Controller,
             communicator = zmq_communicator, # 传入你的通信器
             cartesian_points=cartesian_points,
             joint_angle_traj=joint_angle_traj,

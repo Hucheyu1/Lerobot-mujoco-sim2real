@@ -1,6 +1,5 @@
 import mujoco
 import numpy as np
-import mujoco_viewer
 import math
 import sys
 # 导入所有必要的库
@@ -213,109 +212,5 @@ class CartesianTrajectoryGenerator:
         # 返回生成的所有数据，这些数据将用于后续的控制和可视化
         return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
 
-
-if __name__ == "__main__":
-    # --- 0. 基本配置 ---
-    # 示例参数，请替换为您自己的模型信息
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_script_dir)
-    MODEL_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml")
-    EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
-    NUM_JOINTS = 5 # 你的机器人关节数量
-    draw_point = 300
-
-    # 创建生成器实例
-    traj_generator = CartesianTrajectoryGenerator(
-        model_path=MODEL_XML_PATH,
-        ee_site_name=EE_SITE_NAME,
-        num_joints=NUM_JOINTS,
-        idx=1, 
-        time_horizon = 60, 
-        time_steps_per_sec = 5
-    )
-
-    # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
-    target_quat = None # 绕X轴旋转90度
-    # target_quat = np.array([0, 0, 1, 0]) 
-
-    # 调用generate方法，反解出关节角度
-    cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name='Fig8',  # Circle, Fig8
-        target_orientation=target_quat
-    )
-    # fig = plt.figure(figsize=(10, 8))
-    # ax = fig.add_subplot(111, projection='3d')
-    # # 绘制轨迹
-    # ax.plot(cartesian_points[:, 0], cartesian_points[:, 1], cartesian_points[:, 2])
-    # # 设置坐标轴标签
-    # ax.set_xlabel('X (m)')
-    # ax.set_ylabel('Y (m)')
-    # ax.set_zlabel('Z (m)')
-    # plt.show()
-    # print(cartesian_points)
-    # --- MuJoCo 动态演示 (核心部分) ---
-    print(f"准备在 MuJoCo 中演示，共 {len(joint_angle_traj)} 帧数据...")
-
-    # 获取底层的 model 和 data 指针
-    # 注意：这里假设你的 traj_generator 类里保存了 self.physics
-    # 如果是 dm_control 风格: model = self.physics.model.ptr, data = self.physics.data.ptr
-    # 如果是原生 mujoco 风格: model = self.model, data = self.data
-    m = traj_generator.physics.model.ptr 
-    d = traj_generator.physics.data.ptr
-
-    with mujoco.viewer.launch_passive(m, d) as viewer:
-        print("MuJoCo Viewer 已启动。")
-        
-        # 自动计算采样步长：保证屏幕上最多只画 1000 个球，避免报错
-        total_points = len(cartesian_points)
-        draw_step = max(1, total_points // draw_point) 
-        print(f"轨迹点总数: {total_points}, 绘图采样步长: {draw_step}")
-        # 2. 绘制轨迹 (应用采样)
-        # 使用 [::draw_step] 进行切片
-        for pt in cartesian_points[::draw_step]:
-            # 双重保险，防止溢出
-            if viewer.user_scn.ngeom >= viewer.user_scn.maxgeom: 
-                break
-            
-            mujoco.mjv_initGeom(
-                viewer.user_scn.geoms[viewer.user_scn.ngeom],
-                type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.002, 0, 0],
-                pos=pt,
-                mat=np.eye(3).flatten(),
-                rgba=[1, 0, 0, 0.3]
-            )
-            viewer.user_scn.ngeom += 1
-
-        for i in range(len(joint_angle_traj)):
-            step_start = time.time()
-
-            # 1. 运动控制
-            d.qpos[:NUM_JOINTS] = joint_angle_traj[i]
-            mujoco.mj_forward(m, d)
-            
-            # 3. 绘制目标点 (不采样)
-            if viewer.user_scn.ngeom < viewer.user_scn.maxgeom:
-                mujoco.mjv_initGeom(
-                    viewer.user_scn.geoms[viewer.user_scn.ngeom],
-                    type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=[0.002, 0, 0],
-                    pos=cartesian_points[i],
-                    mat=np.eye(3).flatten(),
-                    rgba=[0, 1, 0, 1]
-                )
-                viewer.user_scn.ngeom += 1
-
-            viewer.sync()
-
-            time_until_next_step = 0.02 - (time.time() - step_start)
-            if time_until_next_step > 0:
-                time.sleep(time_until_next_step)
-
-        print("演示结束。")
-        
-        # 演示结束后保持窗口不关闭，直到手动关闭
-        while viewer.is_running():
-            time.sleep(0.1)
 
 

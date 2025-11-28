@@ -171,7 +171,7 @@ if __name__ == "__main__":
     arm = Kinematics("gripperframe") 
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_script_dir)
-    MODEL_XML_PATH = os.path.join(project_root, "model", "SO101", "so101_new_calib.xml")
+    MODEL_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "so101_new_calib.xml")
     arm.buildFromMJCF(MODEL_XML_PATH)
     # arm.buildFromURDF("model/SO101/so101_new_calib.urdf")
     theta = np.pi

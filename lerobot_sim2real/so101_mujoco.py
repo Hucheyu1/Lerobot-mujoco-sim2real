@@ -125,7 +125,7 @@ if __name__ == "__main__":
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_script_dir)
-    xml_path = os.path.join(project_root, "model", "SO101", "scene_with_table.xml" if control_mode == 'position' else "scene_with_table_v.xml")
+    xml_path = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml" if control_mode == 'position' else "scene_with_table_v.xml")
     try:
         # 将通信器实例传入Test类
         test = Test(xml_path, zmq_communicator, control_mode)

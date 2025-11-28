@@ -326,8 +326,8 @@ if __name__ == "__main__":
     # --- 配置 ---
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_script_dir)
-    SCENE_XML_PATH = os.path.join(project_root, "model", "SO101", "scene_with_table.xml")
-    ARM_XML_PATH = os.path.join(project_root, "model", "SO101", "so101_new_calib.xml")
+    SCENE_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml")
+    ARM_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "so101_new_calib.xml")
     EE_SITE_NAME = 'gripperframe'
     NUM_JOINTS = 6
 
