@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 from models.base_model import KoopmanNet
 from models.init_model import init_model
-from models.losses import k_linear_loss, pred_and_eval_loss_old, pred_and_eval_loss_new
+from models.losses import k_linear_loss, pred_and_eval_loss_old, koopformer_loss, koopformer_eval_loss
 from args import Args
 import os
 import shutil
@@ -50,10 +50,17 @@ def evaluate(
     with torch.no_grad():
         for step, batch in enumerate(tqdm(test_loader)):
 
-            pred_and_error = pred_and_eval_loss_old(
-                batch_data=batch,
-                net=model,
-            )
+            if type(model).__name__ == 'Koopformer_PatchTST':
+                pred_and_error = koopformer_eval_loss(
+                    batch_data=batch,
+                    net=model,
+                )
+            else:
+                pred_and_error = pred_and_eval_loss_old(
+                    batch_data=batch,
+                    net=model,
+                )
+                
             pred = pred_and_error["pred"]
             error = pred_and_error["pred_loss"]
             dis_loss = pred_and_error["dis_loss"]
@@ -137,15 +144,26 @@ def train(
         )
         for step, batch in enumerate(train_loader):
             model.train()
-            losses = k_linear_loss(
-                epoch,
-                batch_data=batch,
-                net=model,
-                loss_name=loss_name,
-                gamma=gamma,
-                pre_length=pre_length,
-                device=device,
-            )
+            if type(model).__name__ == 'Koopformer_PatchTST':
+                losses = koopformer_loss(
+                    epoch,
+                    batch_data=batch,
+                    net=model,
+                    loss_name=loss_name,
+                    gamma=gamma,
+                    pre_length=pre_length,
+                    device=device,
+                )
+            else:
+                losses = k_linear_loss(
+                    epoch,
+                    batch_data=batch,
+                    net=model,
+                    loss_name=loss_name,
+                    gamma=gamma,
+                    pre_length=pre_length,
+                    device=device,
+                )
             loss = losses["total_loss"]
 
             # Backward

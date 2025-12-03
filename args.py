@@ -10,8 +10,8 @@ class Args:
 
     def _add_args(self):
         # 核心参数
-        self.parser.add_argument("--model", type=str, default="DKUC", 
-                                choices=["DKUC", "DBKN", "IKN", "IBKN", "all"],
+        self.parser.add_argument("--model", type=str, default="Koopformer", 
+                                choices=["DKUC", "DBKN", "IKN", "IBKN", "Koopformer","all"],
                                 help="模型类型,可选值: DKUC, DBKN, IKN, IBKN, all (默认: all)")
         self.parser.add_argument("--mode", type=str, default="train",
                                 choices=["train", "test"],
@@ -116,6 +116,11 @@ class Args:
         """可逆网络u分支的通道数"""
         self.args.u_hiddens = [64, 128]
         """可逆网络u分支的隐藏层维度"""
+
+        # transform网络参数
+        self.args.seq_len = 12
+        self.args.patch_len = 4 
+        self.args.d_model = 24
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""

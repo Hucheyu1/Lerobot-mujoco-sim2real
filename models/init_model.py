@@ -1,4 +1,5 @@
 from .KoopmanBase import Koopmanlinear, KoopmanBlinear
+from .Koopform import Koopformer_PatchTST
 def init_model(args):
     print(f"Initiating {args.model}")
     if args.model == "DKUC":
@@ -16,4 +17,14 @@ def init_model(args):
             args.u_z
         ).to(args.device)
         return model
-    raise ValueError(f"Model {args.model} not implemented!")
+    elif args.model == "Koopformer":
+        model = Koopformer_PatchTST(
+            args.x_dim,
+            args.u_dim,
+            args.seq_len,
+            args.patch_len,
+            args.d_model,
+        ).to(args.device)
+        return model           
+    else:
+        raise ValueError(f"Model {args.model} not implemented!")
