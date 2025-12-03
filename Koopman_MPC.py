@@ -1,3 +1,5 @@
+import os
+# os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 import mujoco
 import numpy as np
 from utility.ZMQ import ZMQCommunicator
@@ -98,7 +100,7 @@ class Test:
             mujoco.mjv_initGeom(
                 self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                 type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.002, 0, 0],       # 2mm 红球
+                size=[0.001, 0, 0],       # 2mm 红球
                 pos=pt,
                 mat=np.eye(3).flatten(),
                 rgba=[1, 0, 0, 0.3]       # 半透明红
@@ -130,7 +132,7 @@ class Test:
                 mujoco.mjv_initGeom(
                     self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                     type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=[0.002, 0, 0],    # 1cm 绿球
+                    size=[0.001, 0, 0],    # 1cm 绿球
                     pos=current_pos,
                     mat=np.eye(3).flatten(),
                     rgba=[0, 1, 0, 1]     # 不透明绿
@@ -231,6 +233,7 @@ if __name__ == "__main__":
     # --- 0. 基本配置 ---
     # 示例参数，请替换为您自己的模型信息
     args = Args()
+    args.device = "cpu"
     MODEL_XML_PATH = args.xml_path
     EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
     NUM_JOINTS = args.u_dim # 你的机器人关节数量
@@ -259,7 +262,7 @@ if __name__ == "__main__":
     model = init_model(args)
     model.double()
     load_model_path = args.output_dir + "/best_model.pt"
-    model.load_state_dict(torch.load(load_model_path))
+    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
     MPC_Controller = MPCController(model, args)
 
     try:
