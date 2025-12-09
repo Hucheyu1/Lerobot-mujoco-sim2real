@@ -50,7 +50,7 @@ def evaluate(
     with torch.no_grad():
         for step, batch in enumerate(tqdm(test_loader)):
 
-            if type(model).__name__ == 'Koopformer_PatchTST':
+            if type(model).__name__.startswith('Koopformer') or type(model).__name__.startswith('KoopmanLSTM'):
                 pred_and_error = koopformer_eval_loss(
                     batch_data=batch,
                     net=model,
@@ -144,7 +144,7 @@ def train(
         )
         for step, batch in enumerate(train_loader):
             model.train()
-            if type(model).__name__ == 'Koopformer_PatchTST':
+            if type(model).__name__.startswith('Koopformer') or type(model).__name__.startswith('KoopmanLSTM'):
                 losses = koopformer_loss(
                     epoch,
                     batch_data=batch,

@@ -129,6 +129,9 @@ class Args:
         # KAN网络
         self.args.kan_layers = [self.args.x_dim, 32, 16]
         self.args.kan_params = None
+        # LSTM网络
+        self.args.LSTM_Hidden = 8
+        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 32, 32, 16]
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""

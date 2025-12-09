@@ -235,6 +235,9 @@ def koopformer_loss(
         gamma (float): 多步预测中损失的时间衰减因子。
         pre_length (int): 开环预测的步数。
     """
+    recon_bool = 0
+    if net.use_decoder:
+        recon_bool = 1
     x = batch_data["x"]
     u = batch_data["u"]
     # B, total_len, x_dim = x.shape
@@ -305,8 +308,8 @@ def koopformer_loss(
         z_current = z_pred_next  # 开环：用预测值进行下一步预测
 
     # 5. 计算最终加权平均损失
-    total_loss = (pred_loss + koopman_loss) / total_weight
-
+    total_loss = koopman_loss + dis_loss + 0.25 * angle_loss + recon_bool * recon_loss
+    total_loss = total_loss / total_weight
     # 6. 返回损失字典 (移除了 H_Loss 和 stable_Loss)
     return dict(
         total_loss=total_loss,
