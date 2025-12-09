@@ -85,6 +85,11 @@ class Args:
         self.parser.add_argument("--render", action="store_true", default=True,
                                 help="是否渲染")
 
+        self.parser.add_argument("--use_stable", type=bool, default=False,
+                                help="是否使用稳定Koopman")
+        self.parser.add_argument("--use_decoder", type=bool, default=True,
+                                help="是否训练解码器")
+        
     def process_args(self):
         project_root = os.path.abspath('.') 
         """动态处理衍生参数（和原 Tap 类的 process_args 功能一致）"""
@@ -121,6 +126,9 @@ class Args:
         self.args.seq_len = 12
         self.args.patch_len = 4 
         self.args.d_model = 24
+        # KAN网络
+        self.args.kan_layers = [self.args.x_dim, 32, 16]
+        self.args.kan_params = None
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""

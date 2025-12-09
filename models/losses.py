@@ -61,7 +61,7 @@ def k_linear_loss(
         device='cpu',
 ):
     recon_bool = 0
-    if type(net).__name__ == 'KoopmanAutoencoder' or 'KoopmanBAutoencoder':
+    if net.use_decoder:
         recon_bool = 1
     x = batch_data["x"]
     u = batch_data["u"]
@@ -89,7 +89,6 @@ def k_linear_loss(
         i = i + start_idx
         u0 = u[:, i, :]
         u0_emb = net.u_encoder(x0, u0)
-        
         x1_emb_pred = net.koopman_operation(x0_emb, u0_emb)
         x1_pred = net.x_decoder(x1_emb_pred)
         x1 = x[:, i + 1 , :]
@@ -104,15 +103,12 @@ def k_linear_loss(
         angle_loss += beta * base_loss_fn(x1_pred[:,3:], x1[:,3:])
 
         pred_loss += beta * base_loss_fn(x1_pred, x1)   # 位置与角度单位不一致，角度权重大些 
-        total_loss += beta * (base_loss_fn(x1_emb_pred, x1_emb) + \
-                              base_loss_fn(x1_pred, x1) + \
-                              recon_bool * base_loss_fn(x1_recon, x1) )
 
         cont += beta
         beta *= gamma
         x0_emb = x1_emb_pred
 
-    
+    total_loss = koopman_loss + dis_loss + 0.25 * angle_loss + recon_bool * recon_loss
     stable_Loss = spectral_radius_loss(net)
     H_Loss = sparsity_loss(net)
     total_loss = total_loss / cont #+ λ_spec * stable_Loss + λ_sparse * H_Loss
@@ -122,8 +118,8 @@ def k_linear_loss(
         koopman_loss=koopman_loss / cont,
         pred_loss=pred_loss / cont,
         recon_loss=recon_loss / cont,
-        dis_loss = dis_loss / cont,
-        angle_loss = angle_loss / cont,
+        dis_loss =  dis_loss / cont,
+        angle_loss = 0.25 * angle_loss / cont,
         stable_Loss = stable_Loss * λ_spec,
         H_Loss = H_Loss * λ_sparse
     )

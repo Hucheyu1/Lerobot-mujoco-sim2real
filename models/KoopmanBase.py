@@ -40,7 +40,8 @@ class Koopmanlinear(KoopmanNet):
         with torch.no_grad():
             self.lC.weight.data[:self.x_dim, :self.x_dim] = torch.eye(self.x_dim)
             self.lC.weight.data[:, self.x_dim:] = 0.0
-
+        self.lC.weight.requires_grad = False
+        
     def x_encoder(self, x):
         feat = self.x_encode_net(x)
         return torch.cat([x, feat], dim=-1)
