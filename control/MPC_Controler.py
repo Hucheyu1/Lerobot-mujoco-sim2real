@@ -11,14 +11,14 @@ class MPCController:
         self.args = args
         #  ==== 系统参数 ==== 
         self.obs_num = 3  #  可观测量 3位置，8位置与角度
+        self.x_dim = args.x_dim  #  可观测量 3位置，8位置与角度
         self.Ad = net.lA.weight.cpu().detach().numpy() # (32, 32)
         self.Bd = net.lB.weight.cpu().detach().numpy() # (32, 5)
         self.Nkoopman = self.Ad.shape[0]
         if hasattr(net, 'H'):  # 检查是否存在该层
             self.H_hat_list = net.get_Hi_numpy()
             self.Hd = net.H.weight.cpu().detach().numpy() # (32, 224)
-        self.C = np.zeros((self.obs_num, self.Nkoopman))
-        self.C[:self.obs_num, :self.obs_num] = np.eye(self.obs_num)  # 假设前10维对应位置
+        # self.Cd = net.lC.weight.cpu().detach().numpy() # (32, 5)
         self.B_d_pinv = np.linalg.pinv(self.Bd)
 
         # ==== MPC 参数 ====
@@ -28,12 +28,15 @@ class MPCController:
         self.Q = ca.DM(Q)  # 状态误差权重
         self.R = ca.DM(R)# 控制输入权重
         self.u_eso = np.zeros(self.u_dim)
+        self.startid = 0
+        if hasattr(net, 'seq_len'):  # 用于时序网络
+            self.startid = net.seq_len - 1
 
         # 构建MPC求解器
         self.u_prev = np.zeros(self.u_dim)
         self.MPC_type = args.MPC_type
         self.state_full = False
-        if args.model == 'IBKN' or 'IKN':
+        if args.use_decoder or args.model == 'IBKN' or 'IKN':
             self.state_full = True
         if self.state_full:
             self.Q = ca.DM(50* np.eye(self.Nkoopman))  # 状态误差权重
@@ -74,7 +77,7 @@ class MPCController:
             for t in range(self.H):
                 u_t = u[t*self.u_dim:(t+1)*self.u_dim]
                 z_next = ca.mtimes(self.Ad, z) + ca.mtimes(B_total, u_t)  # 加入扰动补偿
-                ee_pos_pred = z_next[:10]
+                ee_pos_pred = z_next[:self.x_dim]    
                 cost += ca.mtimes([(ee_pos_pred - ref[t,:].T).T, self.Q, (ee_pos_pred - ref[t,:].T)]) + ca.mtimes([u_t.T, self.R, u_t])
                 z = z_next
         else:
@@ -118,7 +121,7 @@ class MPCController:
             z_next = ca.mtimes(self.Ad, z) + ca.mtimes(B_total, u_t)
             
             if not self.state_full:
-                ee_pos_pred = z_next[:10]
+                ee_pos_pred = z_next[:self.x_dim]
                 cost += ca.mtimes([(ee_pos_pred - ref[t,:].T).T, self.Q, (ee_pos_pred - ref[t,:].T)])
             else:
                 cost += ca.mtimes([(z_next - ref[t,:].T).T, self.Q, (z_next - ref[t,:].T)])

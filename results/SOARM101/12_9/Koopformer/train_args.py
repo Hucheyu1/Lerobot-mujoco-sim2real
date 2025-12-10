@@ -11,7 +11,8 @@ class Args:
     def _add_args(self):
         # 核心参数
         self.parser.add_argument("--model", type=str, default="all", 
-                                choices=["DKUC", "DBKN", "IKN", "IBKN", "Koopformer","all"],
+                                choices=["DKUC", "DBKN", "IKN", "IBKN", "all",
+                                         'KoopmanLSTMlinear_KAN', "Koopformer",'KANKoopman'],
                                 help="模型类型,可选值: DKUC, DBKN, IKN, IBKN, all (默认: all)")
         self.parser.add_argument("--mode", type=str, default="train",
                                 choices=["train", "test"],
@@ -126,9 +127,11 @@ class Args:
         self.args.seq_len = 12
         self.args.patch_len = 4 
         self.args.d_model = 24
+
         # KAN网络
         self.args.kan_layers = [self.args.x_dim, 32, 16]
         self.args.kan_params = None
+
         # LSTM网络
         self.args.LSTM_Hidden = 8
         self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 32, 32, 16]

@@ -51,7 +51,7 @@ class Test:
         self.num_joints = num_joints
         
         # 轨迹播放进度计数器
-        self.traj_index = 0
+        self.traj_index = Controller.startid
         self.total_frames = len(joint_angle_traj)
         
         # 预计算采样步长 (防止点太多卡顿)
@@ -85,10 +85,16 @@ class Test:
         在仿真循环开始前执行一次
         """
         # 将机器人复位到轨迹的起始位置
+        print(self.traj_index)
         if self.total_frames > 0:
-            self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[0]
+            self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index]
             mujoco.mj_forward(self.env.model, self.env.data)
-            self.state_tensor = torch.DoubleTensor(self.state_all_ref[0]).unsqueeze(0)
+            if self.traj_index == 0:
+                self.state0 = self.state_all_ref[0]
+            else:
+                self.state0 = self.state_all_ref[:self.traj_index+1]
+            self.state_tensor = torch.DoubleTensor(self.state0).unsqueeze(0) 
+            
         print("仿真即将开始...")
         # --- 1. 绘制静态轨迹 (红色小球) ---
         # 注意：必须每帧都画，因为 viewer.sync() 会清空 user_scn
@@ -100,7 +106,7 @@ class Test:
             mujoco.mjv_initGeom(
                 self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                 type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.001, 0, 0],       # 2mm 红球
+                size=[0.002, 0, 0],       # 2mm 红球
                 pos=pt,
                 mat=np.eye(3).flatten(),
                 rgba=[1, 0, 0, 0.3]       # 半透明红
@@ -119,20 +125,18 @@ class Test:
         self.env.data.qfrc_applied[:] =  self.env.data.qfrc_bias[:]
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
-        if self.traj_index < self.total_frames:
-
+        if self.traj_index < self.total_frames - self.H:
             self.runMPC()
             # 前向动力学计算
             mujoco.mj_forward(self.env.model, self.env.data)
-            
             # 绘制当前目标点 (绿色大球)
             # current_pos = self.cartesian_points[self.traj_index]
-            current_pos = self.actual_traj[self.traj_index][:3]
+            current_pos = self.actual_traj[self.traj_index-self.mpc_controller.startid][:3]
             if self.env.viewer.user_scn.ngeom <= self.env.viewer.user_scn.maxgeom:
                 mujoco.mjv_initGeom(
                     self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                     type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=[0.001, 0, 0],    # 1cm 绿球
+                    size=[0.002, 0, 0],    # 1cm 绿球
                     pos=current_pos,
                     mat=np.eye(3).flatten(),
                     rgba=[0, 1, 0, 1]     # 不透明绿
@@ -144,11 +148,14 @@ class Test:
             
             # 如果觉得播放太快，可以在这里加一点点延时，但通常不建议在 GUI 线程 sleep 太久
             # time.sleep(0.002) 
-            
+        
+        
         # --- 阶段 2: 主轨迹刚结束，生成回归路径 (只执行一次) ---
         elif self.return_traj is None and self.home_qpos is not None:
-            print("主轨迹播放完毕，生成回归 Home 的路径...")
             
+            print("主轨迹播放完毕，生成回归 Home 的路径...")
+            print(len(self.actual_traj))
+            time.sleep(0.5) 
             start_qpos = self.joint_angle_traj[-1]       # 当前位置
             end_qpos = self.home_qpos[:self.num_joints]  # 目标位置
             
@@ -218,8 +225,14 @@ class Test:
 
         # --- 3. 应用控制并步进仿真 ---
         s_next , _, _, _, _ = self.env.step(a) # (8,)
-        self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8)
-        self.actual_traj.append(self.state_tensor.detach().cpu().numpy().reshape(-1))
+        self.actual_traj.append(s_next)
+        # 处理时间序列
+        if self.mpc_controller.startid > 0:
+            self.state0 = np.concatenate((self.state0[1:,:],s_next.reshape(1,-1)),axis=0) # (5, 8)
+            s_next = self.state0.copy()
+
+        self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8) / (1, 5, 8)
+        
  
     def is_running(self):
         return self.env.viewer.is_running()
