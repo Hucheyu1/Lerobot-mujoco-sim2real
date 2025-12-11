@@ -365,7 +365,7 @@ def main(args):
 if __name__ == "__main__":
     args = Args()
     if args.model == 'all':
-        methods = ['DKUC', 'DBKN', 'IBKN', 'IKN']
+        methods = ["KoopmanLSTMlinear", "Koopformer","DKUC","KANKoopman","Koopformer_KAN","KoopmanLSTMlinear_KAN"]
         if args.mode == 'test':
             args.device = 'cpu'
         for method in methods:  
