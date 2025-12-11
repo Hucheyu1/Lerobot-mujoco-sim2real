@@ -41,14 +41,15 @@ class KoopmanLSTMlinear(StableKoopmanOperator):
 
         super().__init__(x_dim, u_dim, encode_layers, use_stable, use_decoder)
         self.seq_len = seq_len
-        self.lstm_block = LSTMBlock(input_dim = self.x_dim, hidden_dim= LSTM_Hidden , only_last=True)
+        self.input_embed = nn.Linear(x_dim, LSTM_Hidden)
+        self.lstm_block = LSTMBlock(input_dim = LSTM_Hidden, hidden_dim= LSTM_Hidden , only_last=True)
 
         Layers = OrderedDict()
         for layer_i in range(len(encode_layers)-1):
             Layers["linear_{}".format(layer_i)] = nn.Linear(encode_layers[layer_i],encode_layers[layer_i+1])
             if layer_i != len(encode_layers)-2:
                 Layers["relu_{}".format(layer_i)] = nn.ReLU()
-
+                
         # 状态输入编码器
         self.x_encode_net = nn.Sequential(Layers)
         # 控制输入编码器：恒等映射（直接返回原始控制输入）
@@ -60,7 +61,8 @@ class KoopmanLSTMlinear(StableKoopmanOperator):
         # 输入: (B, T, C), 输出: (B, T, d_model)
         if x_history.dim() == 2:
             x_history = x_history.unsqueeze(0)
-        x = self.lstm_block(x_history)    
+        x = self.input_embed(x_history)
+        x = self.lstm_block(x)    
         feat = self.x_encode_net(x)
         if self.use_decoder:
             return feat
@@ -77,13 +79,13 @@ class KoopmanLSTMlinear(StableKoopmanOperator):
         return u_emb    
     
 class KoopmanLSTMlinear_KAN(KoopmanLSTMlinear):
-    """继承 Koopformer, 只替换 Linear 层为 KAN"""
+    """继承 KoopmanLSTMlinear, 只替换 Linear 层为 KAN"""
     def __init__(self, x_dim, u_dim, seq_len, encode_layers, LSTM_Hidden, use_stable, use_decoder):
         # 先调用父类构造函数
         super().__init__(x_dim, u_dim, seq_len, encode_layers, LSTM_Hidden, use_stable, use_decoder)
 
         # 替换输入嵌入为 KAN
-        self.x_encode_net = KAN(encode_layers)
+        self.x_encode_net = KAN(LSTM_Hidden , encode_layers[-1])
 
         # 替换解码器为 KAN（如果启用）
         if use_decoder:

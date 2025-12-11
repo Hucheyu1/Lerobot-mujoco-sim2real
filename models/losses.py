@@ -293,14 +293,12 @@ def koopformer_loss(
         # d.2. 库普曼一致性损失 (Koopman Consistency Loss)
         # 将真实的 x_{t+i+1} 编码，得到 z_true_next
         # 注意：这里为了得到 z_{t+i+1}, 我们需要 t+i 时刻的历史数据
-        x_hist_next = x[:, current_time_idx + 1 - (seq_len-1)  : current_time_idx + 1, :]
+        x_hist_next = x[:, current_time_idx + 1 - (seq_len-1)  : current_time_idx + 2, :]
         z_true_next = net.x_encoder(x_hist_next)
-        
         koopman_loss += beta * base_loss_fn(z_pred_next, z_true_next) 
-
         # d.3. 重构损失 (Reconstruction Loss) - 只在第一步计算即可
-        x_recon_initial = net.x_decoder(z_current) # 解码初始 z_t
-        recon_loss += beta * base_loss_fn(x_recon_initial, x[:,  current_time_idx, :])
+        x_recon_initial = net.x_decoder(z_true_next) # 解码初始 z_t
+        recon_loss += beta * base_loss_fn(x_recon_initial, x_hist_next[:,  -1 , :])
 
         # e. 更新循环变量
         total_weight += beta
@@ -322,7 +320,7 @@ def koopformer_loss(
         H_Loss = torch.tensor(0.0)
     )
 
-def koopformer_eval_loss(
+def koopformer_eval_loss_new(
     batch_data: Dict[str, Tensor],
     net: KoopmanNet  # Koopformer 模型实例
 ) -> Dict[str, Tensor]:
@@ -409,6 +407,92 @@ def koopformer_eval_loss(
 
     return dict(
         pred=pred_trajectory,
+        pred_loss=avg_pred_loss,
+        dis_loss=avg_dis_loss,
+        angle_loss=avg_angle_loss
+    )
+
+def koopformer_eval_loss_old(
+    batch_data: Dict[str, Tensor],
+    net: KoopmanNet  # Koopformer 模型实例
+) -> Dict[str, Tensor]:
+    """
+    对 Koopformer 模型进行开环预测并评估损失，返回格式与旧函数保持一致。
+
+    1. 使用初始的一段历史数据 (长度为 seq_len) 进行编码，得到初始潜在状态 z_t。
+    2. 从该初始状态开始，利用未来的控制信号 u, 在潜在空间中进行连续的多步预测。
+    3. 将每一步预测的潜在状态解码回物理空间。
+    4. 计算并累加各项损失。
+    5. 将所有预测步拼接成一个完整的轨迹张量。
+
+    Args:
+        batch_data (Dict): 包含 'x' 和 'u' 的数据字典。
+                           'x' shape: (B, total_len, x_dim)
+                           'u' shape: (B, total_len, u_dim)
+        net (Koopformer): 待评估的模型实例。
+
+    Returns:
+        Dict[str, Tensor]: 包含以下键值对的字典：
+            - 'pred': 完整的预测轨迹，形状为 (B, total_len, x_dim)。
+            - 'pred_loss': 平均预测损失 (标量张量)。
+            - 'dis_loss': 平均位置损失 (标量张量)。
+            - 'angle_loss': 平均角度损失 (标量张量)。
+    """
+    net.eval()  # 确保模型处于评估模式
+
+    x = batch_data["x"]
+    u = batch_data["u"]
+    B, total_len, x_dim = x.shape
+    seq_len = net.seq_len  # 从模型中获取历史序列长度
+
+    # --- 1. 使用初始历史序列编码 ---
+    x_history = x[:, :seq_len, :]
+    # 得到 t = seq_len-1 时刻的潜在状态 z
+
+    pred = x_history.clone()
+    base_loss_fn = BaseLoss('mae')
+    pred_loss = 0.0
+    dis_loss = 0.0
+    angle_loss = 0.0
+    
+    # 预测的步数
+    num_pred_steps = total_len - seq_len 
+
+    # --- 3. 执行开环预测循环 ---
+    for i in range(num_pred_steps):
+        # 当前时间步索引 t
+        current_time_idx = (seq_len - 1) + i
+        # a. 获取用于预测的未来控制 u_t
+        z_current = net.x_encoder(x_history)
+        u_future = u[:, current_time_idx, :]
+        
+        # b. 在潜在空间中进行一步预测，得到 z_{t+1}
+        u_emb = net.u_encoder(None, u_future) # u_encoder现在只接收u
+        z_pred_next = net.koopman_operation(z_current, u_emb)
+        
+        # c. 将预测的潜在状态解码回物理空间，得到 x_{t+1}
+        x_pred_next = net.x_decoder(z_pred_next)
+        
+        # d. 记录预测结果
+        pred = torch.cat((pred, x_pred_next.unsqueeze(1)), dim=1)
+        # e. 计算与真实值的损失
+        x_true_next = x[:, current_time_idx + 1, :]
+        pred_loss += base_loss_fn(x_pred_next, x_true_next)
+        
+        # 分别计算位置和角度损失
+        dis_loss += base_loss_fn(x_pred_next[:, :3], x_true_next[:, :3])
+        angle_loss += base_loss_fn(x_pred_next[:, 3:], x_true_next[:, 3:])
+
+        # f. 更新循环变量，为下一步预测做准备 (开环核心)
+        x_history = pred[:,-seq_len:,:].clone()
+
+
+    avg_pred_loss = pred_loss / num_pred_steps
+    avg_dis_loss = dis_loss / num_pred_steps
+    avg_angle_loss = angle_loss / num_pred_steps
+
+    return dict(
+        pred=pred,
         pred_loss=avg_pred_loss,
         dis_loss=avg_dis_loss,
         angle_loss=avg_angle_loss

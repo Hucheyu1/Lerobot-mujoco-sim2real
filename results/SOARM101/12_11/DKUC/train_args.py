@@ -10,15 +10,16 @@ class Args:
 
     def _add_args(self):
         # 核心参数
-        self.parser.add_argument("--model", type=str, default="DKUC", 
-                                choices=["DKUC", "DBKN", "IKN", "IBKN", "all"],
+        self.parser.add_argument("--model", type=str, default="all", 
+                                choices=["DKUC", "DBKN", "IKN", "IBKN", "all",
+                                         'KoopmanLSTMlinear_KAN', "Koopformer",'KANKoopman'],
                                 help="模型类型,可选值: DKUC, DBKN, IKN, IBKN, all (默认: all)")
         self.parser.add_argument("--mode", type=str, default="train",
                                 choices=["train", "test"],
                                 help="运行模式, 可选值: train / test (默认: train)")
         self.parser.add_argument("--env", type=str, default="SOARM101",
                                 help="环境名称（用于路径生成）(默认: SOARM101)")
-        self.parser.add_argument("--suffix", type=str, default="11_27",
+        self.parser.add_argument("--suffix", type=str, default="12_11",
                                 help="实验后缀（用于路径区分）")
         self.parser.add_argument("--seed", type=int, default=42,
                                 help="随机种子 (默认: 42)")
@@ -85,6 +86,11 @@ class Args:
         self.parser.add_argument("--render", action="store_true", default=True,
                                 help="是否渲染")
 
+        self.parser.add_argument("--use_stable", type=bool, default=False,
+                                help="是否使用稳定Koopman")
+        self.parser.add_argument("--use_decoder", type=bool, default=False,
+                                help="是否训练解码器")
+        
     def process_args(self):
         project_root = os.path.abspath('.') 
         """动态处理衍生参数（和原 Tap 类的 process_args 功能一致）"""
@@ -100,7 +106,7 @@ class Args:
         self.args.data_dir_load_val = os.path.join(project_root, self.args.env, "data", f"val_data_{self.args.test_samples}_{self.args.test_steps}.npy")
 
         # 网络层维度配置
-        self.args.layers = [self.args.x_dim, 64, 64, 64, 64, 24]  # 调整输出维度以适应SOARM101
+        self.args.layers = [self.args.x_dim, 32, 32, 32, 16]  # 调整输出维度以适应SOARM101
         """Koopman线性/双线性网络的全连接层维度（输入维度=x_dim)"""
 
         # 可逆网络参数
@@ -116,6 +122,19 @@ class Args:
         """可逆网络u分支的通道数"""
         self.args.u_hiddens = [64, 128]
         """可逆网络u分支的隐藏层维度"""
+
+        # transform网络参数
+        self.args.seq_len = 12
+        self.args.patch_len = 4 
+        self.args.d_model = 16
+
+        # KAN网络
+        self.args.kan_layers = [self.args.x_dim, 32, 16]
+        self.args.kan_params = None
+
+        # LSTM网络
+        self.args.LSTM_Hidden = 32
+        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 16]
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""

@@ -54,16 +54,18 @@ class StableKoopmanOperator(KoopmanNet):
         self.use_stable = use_stable
         self.use_decoder = use_decoder
         self.rho_max = rho_max
-        # 状态转移矩阵 K 的参数 (Orthogonal-Diagonal-Orthogonal 分解)
-        self.U_raw = nn.Parameter(torch.randn(self.Nkoopman, self.Nkoopman))
-        self.V_raw = nn.Parameter(torch.randn(self.Nkoopman, self.Nkoopman))
-        self.S_raw = nn.Parameter(torch.randn(self.Nkoopman))
-        
-        # koopman矩阵
-        self.lA = nn.Linear(self.Nkoopman, self.Nkoopman,bias=False)
-        self.lA.weight.data = gaussian_init_(self.Nkoopman, std=1)
-        U, _, V = torch.svd(self.lA.weight.data)
-        self.lA.weight.data = torch.mm(U, V.t()) * 0.9
+
+        if use_stable:
+            # 状态转移矩阵 K 的参数 (Orthogonal-Diagonal-Orthogonal 分解)
+            self.U_raw = nn.Parameter(torch.randn(self.Nkoopman, self.Nkoopman))
+            self.V_raw = nn.Parameter(torch.randn(self.Nkoopman, self.Nkoopman))
+            self.S_raw = nn.Parameter(torch.randn(self.Nkoopman))
+        else:
+            # koopman矩阵
+            self.lA = nn.Linear(self.Nkoopman, self.Nkoopman,bias=False)
+            self.lA.weight.data = gaussian_init_(self.Nkoopman, std=1)
+            U, _, V = torch.svd(self.lA.weight.data)
+            self.lA.weight.data = torch.mm(U, V.t()) * 0.9
         # 控制矩阵
         self.lB = nn.Linear(u_dim, self.Nkoopman, bias=False)
         # 解码矩阵 C：将潜在状态 z 解码回原始状态 x

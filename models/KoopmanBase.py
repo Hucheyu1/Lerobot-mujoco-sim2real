@@ -10,13 +10,13 @@ def gaussian_init_(n_units, std=1):
     return Omega
 
 class Koopmanlinear(KoopmanNet):
-    def __init__(self, x_dim, u_dim, encode_layers):
+    def __init__(self, x_dim, u_dim, encode_layers, use_decoder=False):
 
         super(KoopmanNet, self).__init__()
         self.Nkoopman = encode_layers[-1] + x_dim
         self.u_dim = u_dim
         self.x_dim = x_dim
-
+        self.use_decoder = use_decoder
         Layers = OrderedDict()
         for layer_i in range(len(encode_layers)-1):
             Layers["linear_{}".format(layer_i)] = nn.Linear(encode_layers[layer_i],encode_layers[layer_i+1])
@@ -37,10 +37,11 @@ class Koopmanlinear(KoopmanNet):
         # 解码矩阵
         self.lC = nn.Linear(self.Nkoopman, self.x_dim, bias=False)
         # 手动初始化权重（单位矩阵 + 零填充）
-        with torch.no_grad():
-            self.lC.weight.data[:self.x_dim, :self.x_dim] = torch.eye(self.x_dim)
-            self.lC.weight.data[:, self.x_dim:] = 0.0
-        self.lC.weight.requires_grad = False
+        if not self.use_decoder:
+            with torch.no_grad():
+                self.lC.weight.data[:self.x_dim, :self.x_dim] = torch.eye(self.x_dim)
+                self.lC.weight.data[:, self.x_dim:] = 0.0
+            self.lC.weight.requires_grad = False
         
     def x_encoder(self, x):
         feat = self.x_encode_net(x)

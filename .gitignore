@@ -1,2 +1,6 @@
 __pycache__/
 data/
+ckpt/
+test_chirp/
+test_random/
+test_sin/

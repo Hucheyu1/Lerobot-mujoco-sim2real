@@ -8,7 +8,8 @@ def init_model(args):
         model = Koopmanlinear(
             args.x_dim,
             args.u_dim,
-            args.layers
+            args.layers,
+            args.use_decoder
         ).to(args.device)
         return model 
     elif args.model == "DBKN":
