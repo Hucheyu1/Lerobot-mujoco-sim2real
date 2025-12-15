@@ -1,14 +1,18 @@
 import numpy as np
 import os
+# os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+import math
 import sys
 current_script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_script_dir)
 sys.path.insert(0, project_root)
 from SOARM101.SOARM101_Env import SOARM101Env
 from args import Args
+import matplotlib.pyplot as plt
+
 
 class Collater():
     def __init__(self, x_dim: int, u_dim: int, device: str = "cuda"):
@@ -205,8 +209,61 @@ class SOARM101DataGenerator:
         return test_loader
         
 
+def visualize_3d_trajectory(data_generator, cartesian_points, traj_type='train'):
+    """
+    可视化指定类型和索引的轨迹数据中的三维位置。
+    
+    Args:
+        data_generator: 您的 SOARM101DataGenerator 实例。
+        traj_type (str): 要可视化的轨迹类型 ('random', 'sin', 'chirp')。
+        traj_index (int): 要可视化的轨迹在批次中的索引。
+    """
+    
+    # 1. 获取数据
+    if traj_type in ['random', 'sin', 'chirp']:
+        data_array = data_generator.test_data_dict.get(traj_type)
+        if data_array is None:
+            print(f"警告：找不到 {traj_type} 类型的测试数据。请确认数据已生成。")
+            return
+    elif traj_type == 'train':
+        data_array = data_generator.train_data
+    else:
+        print(f"无效的轨迹类型: {traj_type}")
+        return
+
+    reshaped_data = data_array[:,0,:]
+    
+    # 2. 提取 X, Y, Z 坐标
+    # 提取所有轨迹的 X, Y, Z 坐标
+    X = reshaped_data[:, 0]
+    Y = reshaped_data[:, 1]
+    Z = reshaped_data[:, 2]
+
+    # 3. 绘制三维图
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 绘制点云
+    # c=Z：颜色根据 Z 坐标变化，s=2：点的大小为 2
+    scatter = ax.scatter(X, Y, Z, 
+                         c=Z, 
+                         cmap='viridis', 
+                         s=0.1, 
+                         alpha=1.0)
+    # 添加颜色条（Color Bar），显示 Z 坐标的映射
+    fig.colorbar(scatter, ax=ax, label='Z Position')
+    # 绘制轨迹
+    ax.plot(cartesian_points[:, 0], cartesian_points[:, 1], cartesian_points[:, 2])
+    # 设置坐标轴标签
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_zlabel('Z (m)')
+    ax.set_title(f'3D Data Acquisition Distribution ({traj_type})')
+    plt.show()
+
 # --- 主数据收集脚本 ---
 if __name__ == "__main__":
+    from control.TrajectoryGenerator import CartesianTrajectoryGenerator,CartesianTrajectoryGenerator_pinocchio
     # 1. 配置参数
     args = Args()
     # 2. 创建生成器实例
@@ -220,3 +277,76 @@ if __name__ == "__main__":
     for test_type in ['random', 'sin', 'chirp']:
         test_loader = data_generate.get_test_loader(test_type)
     print("测试数据加载成功")
+
+
+    MODEL_XML_PATH = args.xml_path
+    EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
+    NUM_JOINTS = args.u_dim # 你的机器人关节数量
+    use_pinocchio = False
+    # 创建生成器实例
+    if not use_pinocchio:
+        traj_generator = CartesianTrajectoryGenerator(
+            model_path=MODEL_XML_PATH,
+            ee_site_name=EE_SITE_NAME,
+            num_joints=NUM_JOINTS,
+            idx=1, 
+            time_horizon = 60, 
+            time_steps_per_sec = 5
+        )
+        # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
+        target_quat = None # 绕X轴旋转90度
+        # target_quat = np.array([0, 0, 1, 0]) 
+        # 调用generate方法，反解出关节角度
+        cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
+            traj_name='Fig8',  # Circle, Fig8
+            target_orientation=target_quat
+        )
+    else:
+        ARM_XML_PATH = args.arm_xml_path
+        traj_generator = CartesianTrajectoryGenerator_pinocchio(
+            arm_model_path=ARM_XML_PATH,
+            ee_site_name=EE_SITE_NAME,
+            num_joints=NUM_JOINTS,
+            idx = 1,
+            time_horizon=60,
+            time_steps_per_sec=5
+        )
+        # 角度（度）
+        angle_degrees = 0  # 0  90.0
+        # 转换为弧度
+        angle_radians = math.radians(angle_degrees)
+        # 计算 cos 和 sin 值
+        c = math.cos(angle_radians)
+        s = math.sin(angle_radians)
+        # 构建绕 X 轴旋转的矩阵
+        target_orientation = np.array([
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ])
+        # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
+        cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
+            traj_name='Fig8',  # Circle, Fig8
+            target_orientation_matrix=target_orientation
+        )
+
+    print("\n正在生成三维轨迹可视化图...")
+    visualize_3d_trajectory(data_generate, cartesian_points, traj_type='train')
+
+ 
+    print(joint_angle_traj)
+    N_joints = joint_angle_traj.shape[1]
+    plt.figure(figsize=(10, 6))
+    # 遍历并绘制每个关节的角度轨迹
+    for i in range(N_joints):
+        # joint_angle_traj[:, i] 选择了所有时间步的第 i 个关节数据
+        plt.plot(time_vec, joint_angle_traj[:, i], label=f'Joint {i + 1} Angle')
+    # 设置图表标题和标签
+    plt.title('Five Joint Angle Trajectories Over Time')
+    plt.xlabel('Time (s)')  # 假设 time_vec 是以秒为单位
+    plt.ylabel('Joint Angle (rad)') # 假设关节角度是以弧度为单位
+
+    # 显示图例、网格并调整布局
+    plt.legend(loc='best')
+    plt.grid(True) 
+    plt.show()

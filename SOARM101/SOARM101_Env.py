@@ -66,6 +66,18 @@ class SOARM101Env(gym.Env):
         if self.render_mode :
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
 
+        self.initial_poses = [
+            np.array([0, 0, 0, 0, 0]),              # 姿态1: 零位
+            # np.array([0,-0.33, 0.29 ,0.20, -1.52])  # 姿态2: 另一个特定姿态
+        ]
+        # 2. 为每个关节定义独立的扰动范围 [low, high]
+        self.perturbation_limits = np.array([
+            # [-0.3, -1.0, -0.6, -0.6, -0.1],  # 每个关节的扰动下限
+            # [ 0.3,  0.3,  0.8,  0.4,  0.6]   # 每个关节的扰动上限
+            [-0.3, -0.3, -0.3, -0.3, -0.3],  # 每个关节的扰动下限
+            [ 0.3,  0.3,  0.3,  0.3,  0.3]   # 每个关节的扰动上限
+        ])
+
     def _get_state(self) -> np.ndarray:
         """获取当前系统的状态 x。"""
         qpos = self.data.qpos[self.joint_ids].copy()
@@ -92,7 +104,19 @@ class SOARM101Env(gym.Env):
             initial_qvel = options['initial_state'][5:10]
         else:
             # 默认重置到一个随机的初始角度和零速度
-            initial_qpos = self.np_random.uniform(low=-0.3, high=0.3, size=self.udim)
+            # 1. 从预定义的初始姿态中随机选择一个
+            selected_pose_idx = self.np_random.integers(len(self.initial_poses))
+            base_qpos = self.initial_poses[selected_pose_idx].copy() # 使用.copy()是个好习惯
+
+            # 2. 生成每个关节独立的随机扰动
+            # np_random.uniform 可以直接接收 low 和 high 数组
+            perturbation = self.np_random.uniform(
+                low=self.perturbation_limits[0],  # 所有关节的下限
+                high=self.perturbation_limits[1], # 所有关节的上限
+                size=self.udim
+            )
+            # 3. 将基础姿态和扰动相加，得到最终的初始关节角度
+            initial_qpos = base_qpos + perturbation
             initial_qvel = np.zeros(self.udim)
 
         self.data.qpos[self.joint_ids] = initial_qpos

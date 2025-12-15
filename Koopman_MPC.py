@@ -3,7 +3,7 @@ import os
 import mujoco
 import numpy as np
 from utility.ZMQ import ZMQCommunicator
-from control.TrajectoryGenerator import CartesianTrajectoryGenerator
+from control.TrajectoryGenerator import CartesianTrajectoryGenerator,CartesianTrajectoryGenerator_pinocchio
 from control.MPC_Controler import MPCController
 import time
 import math
@@ -250,26 +250,54 @@ if __name__ == "__main__":
     MODEL_XML_PATH = args.xml_path
     EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
     NUM_JOINTS = args.u_dim # 你的机器人关节数量
+    use_pinocchio = False
 
-    # 创建生成器实例
-    traj_generator = CartesianTrajectoryGenerator(
-        model_path=MODEL_XML_PATH,
-        ee_site_name=EE_SITE_NAME,
-        num_joints=NUM_JOINTS,
-        idx=1, 
-        time_horizon = 60, 
-        time_steps_per_sec = 5
-    )
-
-    # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
-    target_quat = None # 绕X轴旋转90度
-    # target_quat = np.array([0, 0, 1, 0]) 
-
-    # 调用generate方法，反解出关节角度
-    cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name='Fig8',  # Circle, Fig8
-        target_orientation=target_quat
-    )
+    if not use_pinocchio:
+        # 创建生成器实例
+        traj_generator = CartesianTrajectoryGenerator(
+            model_path=MODEL_XML_PATH,
+            ee_site_name=EE_SITE_NAME,
+            num_joints=NUM_JOINTS,
+            idx=1, 
+            time_horizon = 60, 
+            time_steps_per_sec = 5
+        )
+        # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
+        target_quat = None # 绕X轴旋转90度
+        # target_quat = np.array([0, 0, 1, 0]) 
+        # 调用generate方法，反解出关节角度
+        cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
+            traj_name='Fig8',  # Circle, Fig8
+            target_orientation=target_quat
+        )
+    else:
+        ARM_XML_PATH = args.arm_xml_path
+        traj_generator = CartesianTrajectoryGenerator_pinocchio(
+            arm_model_path=ARM_XML_PATH,
+            ee_site_name=EE_SITE_NAME,
+            num_joints=NUM_JOINTS,
+            idx = 0,
+            time_horizon=60,
+            time_steps_per_sec=5
+        )
+        # 角度（度）
+        angle_degrees = 90  # 0  90
+        # 转换为弧度
+        angle_radians = math.radians(angle_degrees)
+        # 计算 cos 和 sin 值
+        c = math.cos(angle_radians)
+        s = math.sin(angle_radians)
+        # 构建绕 X 轴旋转的矩阵
+        target_orientation = np.array([
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ])
+        # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
+        cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
+            traj_name='Fig8',  # Circle, Fig8
+            target_orientation_matrix=target_orientation
+        )
     
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
     model = init_model(args)

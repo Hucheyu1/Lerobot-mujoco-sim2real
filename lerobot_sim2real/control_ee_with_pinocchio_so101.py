@@ -111,8 +111,8 @@ class CartesianTrajectoryGenerator:
             else: # X-Y平面
                 a = 0.2 * self.traj_scale 
                 b = 0.2 * self.traj_scale
-                z = 0.2 * np.ones((len(t_param), 1))
-                x = np.expand_dims(0.3 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
+                z = 0.05 * np.ones((len(t_param), 1))
+                x = np.expand_dims(0.25 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
                 y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
         
@@ -350,7 +350,7 @@ if __name__ == "__main__":
     )
     # --- 步骤 3: 一行代码生成所有轨迹数据 ---
     # 角度（度）
-    angle_degrees = 90.0  # 0
+    angle_degrees = 90  # 0 90
 
     # 转换为弧度
     angle_radians = math.radians(angle_degrees)
@@ -358,16 +358,31 @@ if __name__ == "__main__":
     # 计算 cos 和 sin 值
     c = math.cos(angle_radians)
     s = math.sin(angle_radians)
-
+    aix = "Y"
     # 构建绕 X 轴旋转的矩阵
-    target_orientation = np.array([
-        [1, 0, 0],
-        [0, c, -s],
-        [0, s, c]
-    ])
+    if aix == "X":
+        target_orientation = np.array([
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ])
+    # 构建绕 Y 轴旋转的矩阵
+    elif aix == "Y":
+        target_orientation = np.array([
+            [c,  0, s],
+            [0,  1, 0],
+            [-s, 0, c]
+        ])
+    # 构建绕 Z 轴旋转的矩阵
+    else:
+        target_orientation = np.array([
+            [c, -s, 0],
+            [s,  c, 0],
+            [0,  0, 1]
+        ])
     # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
     cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name='Circle',  # Circle, Fig8
+        traj_name='Fig8',  # Circle, Fig8
         target_orientation_matrix=target_orientation
     )
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
