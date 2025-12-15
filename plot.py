@@ -8,8 +8,8 @@ import random
 from matplotlib import gridspec
 def main():
     # Loading dataset
-    Methods = ['Koopformer','DKUC','KoopmanLSTMlinear']
-    Methods_name = ['Koopformer','DKUC','KoopmanLSTMlinear']
+    Methods = ["DKUC", "DBKN","IKN","IBKN"]
+    Methods_name = ["DKUC", "DBKN","IKN","IBKN"]
 
     Color = ['blue','black','red','green','pink','purple','orange','grey']
     args = Args()
@@ -47,7 +47,7 @@ def main():
             if input_type == "chirp":
                 axes[0,col].set_title('Chirp Input',fontsize=14)
 
-            if method == 'KoopmanLSTMlinear':
+            if method == 'IBKN':
                 # ==== 预测结果 ====
                 idx = random.randint(0 , len(steps))
                 axes[1,col].plot(steps, all_preds[idx, :, 0], color='blue', linestyle='-.', label='Predicted x')
@@ -79,7 +79,7 @@ def main():
     plt.close(fig)
 
     loss_dir = "./results/" + args.env + "/" + args.suffix + \
-                    "/" + 'KoopmanLSTMlinear'+ "/" + 'train_losses.json'
+                    "/" + 'IBKN'+ "/" + 'train_losses.json'
     # 读取 JSON 文件
     with open(loss_dir, "r") as f:
         data = json.load(f)

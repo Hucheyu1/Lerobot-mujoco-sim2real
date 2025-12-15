@@ -88,14 +88,14 @@ class Args:
 
         self.parser.add_argument("--use_stable", type=bool, default=False,
                                 help="是否使用稳定Koopman")
-        self.parser.add_argument("--use_decoder", type=bool, default=True,
+        self.parser.add_argument("--use_decoder", type=bool, default=False,
                                 help="是否训练解码器")
         
     def process_args(self):
         project_root = os.path.abspath('.') 
         """动态处理衍生参数（和原 Tap 类的 process_args 功能一致）"""
         self.args.xml_path = os.path.join(project_root, self.args.env, "SO101", "scene_with_table_v.xml")
-
+        self.args.arm_xml_path = os.path.join(project_root, self.args.env, "SO101", "so101_new_calib_v.xml")
         # 动态生成输出目录
         self.args.output_dir = os.path.join(project_root, "results", self.args.env, self.args.suffix, self.args.model)
 
@@ -112,15 +112,15 @@ class Args:
         # 可逆网络参数
         self.args.x_blocks = [2, 2]
         """可逆网络x分支的块数"""
-        self.args.x_channels = [12, 16]
+        self.args.x_channels = [10, 16]
         """可逆网络x分支的通道数"""   
-        self.args.x_hiddens = [64, 128]
+        self.args.x_hiddens = [32, 64]
         """可逆网络x分支的隐藏层维度"""
         self.args.u_blocks = [2, 2]
         """可逆网络u分支的块数"""
-        self.args.u_channels = [12, 16]
+        self.args.u_channels = [10, 16]
         """可逆网络u分支的通道数"""
-        self.args.u_hiddens = [64, 128]
+        self.args.u_hiddens = [32, 64]
         """可逆网络u分支的隐藏层维度"""
 
         # transform网络参数
@@ -131,8 +131,9 @@ class Args:
         self.args.kan_layers = [self.args.x_dim, 32, 16]
         self.args.kan_params = None
         # LSTM网络
+        self.args.lstm_seq_len = 6
         self.args.LSTM_Hidden = 32
-        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 16]
+        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 32, 16]
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""
