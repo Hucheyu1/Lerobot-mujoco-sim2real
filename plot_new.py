@@ -19,7 +19,7 @@ def main():
     gs = gridspec.GridSpec(4, 6, figure=fig) 
 
     # 轨迹索引固定，确保输入和输出对应
-    fixed_idx = 10 
+    fixed_idx = random.randint(0 , 2000)
     input_types = ["random", "sin"] # 按照您的要求，展示 random 和 sin
 
     for row_idx, input_type in enumerate(input_types):

@@ -10,7 +10,6 @@ def init_model(args):
             args.x_dim,
             args.u_dim,
             args.layers,
-            args.use_decoder
         ).to(args.device)
         return model 
     elif args.model == "DBKN":
@@ -83,7 +82,6 @@ def init_model(args):
             args.u_blocks,
             args.u_channels,
             args.u_hiddens,
-            args.use_decoder
         ).to(args.device)
         return model
     elif args.model == "IBKN":

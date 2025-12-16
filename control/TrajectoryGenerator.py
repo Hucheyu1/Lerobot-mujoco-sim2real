@@ -164,6 +164,66 @@ class CartesianTrajectoryGenerator:
                 x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
                 y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
+        elif traj_name == 'FigStar':
+            # --- 1. 定义几何参数 ---
+            # 外部圆（五角星的五个尖角所在圆）的参数
+            a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
+            center_x, center_y, center_z = 0.4, 0.0, 0.2 # 统一中心点
+            # 定义五角星的半径和中心点
+            radius = a         # 外部半径（尖角到中心）
+            # 根据 self.idx 确定 2D 形状的中心偏移
+            if self.idx == 1:
+                 # Y-Z 平面：形状中心是 (center_y, center_z)
+                center_prime_0 = center_y
+                center_prime_1 = center_z
+            else:
+                # X-Y 平面：形状中心是 (center_x, center_y)
+                center_prime_0 = center_x
+                center_prime_1 = center_y      
+            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
+            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
+            Star_points_2D = np.zeros((11, 2))
+            for i in range(5):
+                # 尖角 (Outer Points)
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2) 
+                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
+                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
+                
+                # 凹陷点 (Inner Points)
+                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
+                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
+                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
+            # 闭合轨迹：第 11 个点 = 第 1 个点
+            Star_points_2D[-1, :] = Star_points_2D[0, :]
+            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
+            # 计算总时间步数
+            num_steps = len(t_param) # 使用您的 t 或 self.time_vector 
+            # 假设轨迹分段均匀 (10个线段)
+            num_segments = 10 
+            refs = np.zeros((num_steps, 2))
+            # 计算每段轨迹包含的步数
+            each_num = num_steps // num_segments
+            current_step = 0
+            for i in range(num_segments):
+                start_point = Star_points_2D[i, :]
+                end_point = Star_points_2D[i + 1, :]
+                # 确保最后一段占满剩余所有步数
+                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
+                for j in range(num_interp_points):
+                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
+                    
+                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
+                current_step += num_interp_points
+            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
+            if self.idx==1:
+                x = center_x * np.ones((num_steps, 1)) 
+                y = refs[:, 0].reshape(-1, 1) # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1) # Z 对应 2D 坐标的第二个分量 (y')
+            else:
+                x = refs[:, 0].reshape(-1, 1) 
+                y = refs[:, 1].reshape(-1, 1) 
+                z = center_z * np.ones((num_steps, 1))    
+            xyz_coords = np.concatenate( (x, y, z), axis = 1)
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
 
@@ -317,6 +377,66 @@ class CartesianTrajectoryGenerator_pinocchio:
                 x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
                 y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
+        elif traj_name == 'FigStar':
+            # --- 1. 定义几何参数 ---
+            # 外部圆（五角星的五个尖角所在圆）的参数
+            a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
+            center_x, center_y, center_z = 0.4, 0.0, 0.2 # 统一中心点
+            # 定义五角星的半径和中心点
+            radius = a         # 外部半径（尖角到中心）
+            # 根据 self.idx 确定 2D 形状的中心偏移
+            if self.idx == 1:
+                 # Y-Z 平面：形状中心是 (center_y, center_z)
+                center_prime_0 = center_y
+                center_prime_1 = center_z
+            else:
+                # X-Y 平面：形状中心是 (center_x, center_y)
+                center_prime_0 = center_x
+                center_prime_1 = center_y      
+            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
+            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
+            Star_points_2D = np.zeros((11, 2))
+            for i in range(5):
+                # 尖角 (Outer Points)
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2) 
+                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
+                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
+                
+                # 凹陷点 (Inner Points)
+                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
+                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
+                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
+            # 闭合轨迹：第 11 个点 = 第 1 个点
+            Star_points_2D[-1, :] = Star_points_2D[0, :]
+            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
+            # 计算总时间步数
+            num_steps = len(t_param) # 使用您的 t 或 self.time_vector 
+            # 假设轨迹分段均匀 (10个线段)
+            num_segments = 10 
+            refs = np.zeros((num_steps, 2))
+            # 计算每段轨迹包含的步数
+            each_num = num_steps // num_segments
+            current_step = 0
+            for i in range(num_segments):
+                start_point = Star_points_2D[i, :]
+                end_point = Star_points_2D[i + 1, :]
+                # 确保最后一段占满剩余所有步数
+                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
+                for j in range(num_interp_points):
+                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
+                    
+                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
+                current_step += num_interp_points
+            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
+            if self.idx==1:
+                x = center_x * np.ones((num_steps, 1)) 
+                y = refs[:, 0].reshape(-1, 1) # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1) # Z 对应 2D 坐标的第二个分量 (y')
+            else:
+                x = refs[:, 0].reshape(-1, 1) 
+                y = refs[:, 1].reshape(-1, 1) 
+                z = center_z * np.ones((num_steps, 1))    
+            xyz_coords = np.concatenate( (x, y, z), axis = 1)
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
         

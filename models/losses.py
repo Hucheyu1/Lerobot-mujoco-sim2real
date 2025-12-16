@@ -61,7 +61,7 @@ def k_linear_loss(
         device='cpu',
 ):
     recon_bool = 0
-    if net.use_decoder:
+    if net.use_decoder and (not type(net).__name__.startswith('Invert')):
         recon_bool = 1
     x = batch_data["x"]
     u = batch_data["u"]

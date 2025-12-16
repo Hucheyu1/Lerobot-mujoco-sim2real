@@ -4,7 +4,8 @@ import mujoco
 import numpy as np
 from utility.ZMQ import ZMQCommunicator
 from control.TrajectoryGenerator import CartesianTrajectoryGenerator,CartesianTrajectoryGenerator_pinocchio
-from control.MPC_Controler import MPCController
+from control.MPC_Controler import MPCController, MPCController_UKF
+from control.config import Config
 import time
 import math
 from args import Args
@@ -27,7 +28,8 @@ def sim_to_real(q_sim_deg, offsets):
     return [sim - off for sim, off in zip(q_sim_deg, offsets)]
 
 class Test:
-    def __init__(self, path, Controller, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num):
+    def __init__(self, path, Controller, communicator, cartesian_points, 
+                 joint_angle_traj, num_joints, draw_num, config):
         """
         初始化参数
         :param path: XML 模型路径
@@ -39,12 +41,14 @@ class Test:
         
         self.path = path
         self.communicator = communicator
+        self.config = config
         self.env = SOARM101Env(path, render_mode=True)
         # 控制相关
         self.mpc_controller = Controller
         self.H = Controller.H
         # 保存轨迹数据
         self.actual_traj = []
+        self.u_list = []
         self.cartesian_points = cartesian_points # (N, 3)
         self.joint_angle_traj = joint_angle_traj # (N, 5)
         self.state_all_ref = np.hstack([cartesian_points, joint_angle_traj])
@@ -152,7 +156,9 @@ class Test:
         
         # --- 阶段 2: 主轨迹刚结束，生成回归路径 (只执行一次) ---
         elif self.return_traj is None and self.home_qpos is not None:
-            
+            self.config.save_result(np.array(self.u_list), np.array(self.actual_traj), 
+                                    self.cartesian_points[self.mpc_controller.startid+1:self.mpc_controller.startid+1+len(self.actual_traj)],
+                                    self.joint_angle_traj[self.mpc_controller.startid+1:self.mpc_controller.startid+1+len(self.actual_traj)])
             print("主轨迹播放完毕，生成回归 Home 的路径...")
             print(len(self.actual_traj))
             time.sleep(0.5) 
@@ -213,7 +219,7 @@ class Test:
             ref_flat = ref_traj_segment.flatten().reshape(-1, 1)
 
         z0 = self.mpc_controller.Psi_o(self.state_tensor) # (32,1)
-        
+        z_last = z0
         if self.mpc_controller.args.MPC_type == 'mpc':
             p = np.vstack([ref_flat, z0.reshape(-1, 1)])
         if self.mpc_controller.args.MPC_type == 'delta_mpc':
@@ -224,16 +230,51 @@ class Test:
         self.mpc_controller.u_prev = u # 保存当前控制以备下次使用
 
         # --- 3. 应用控制并步进仿真 ---
-        s_next , _, _, _, _ = self.env.step(a) # (8,)
+        s_next= self.runstep(a, z_last) # (8,)
         self.actual_traj.append(s_next)
+        self.u_list.append(u)
         # 处理时间序列
         if self.mpc_controller.startid > 0:
             self.state0 = np.concatenate((self.state0[1:,:],s_next.reshape(1,-1)),axis=0) # (5, 8)
             s_next = self.state0.copy()
 
         self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8) / (1, 5, 8)
+
+    def runstep(self,action,z_last):
+        # config.use_nosie
+        target_velocity = action[:self.env.udim]
+        self.env.data.ctrl[:self.env.udim] = target_velocity
+
+        if self.config.use_nosie:
+            # 定义扰动的最大强度（例如：±0.01 弧度）
+            angle_disturbance_magnitude = 0.01  
+            # 选项 A: 扰动关节位置 (qpos)
+            # qpos 尺寸为 (nq,)，即广义坐标位置维度
+            # 生成一个随机扰动角度 (均匀分布在 [-magnitude, +magnitude])
+            angle_disturb = np.random.uniform(
+                low=-angle_disturbance_magnitude,
+                high=angle_disturbance_magnitude,
+                size=self.env.udim  # 扰动作用于所有关节位置
+            )
+            # 将扰动加到当前的关节角度上
+            self.env.data.qpos[self.env.joint_ids] += angle_disturb
+            # 关键步骤：在修改 qpos 后，必须调用 mj_forward 来更新所有内部变量
+            # 否则 MuJoCo 的状态（如速度、雅可比矩阵等）将不一致。
+            mujoco.mj_forward(self.env.model, self.env.data)
+        if self.config.use_KEM:
+            self.env.data.qpos[self.env.joint_ids] = self.mpc_controller.get_updated_state(self.env._get_state(), z_last, action)
+            mujoco.mj_forward(self.env.model, self.env.data)
+        # 3. 执行物理模拟
+        for _ in range(self.env.frame_skip):
+            mujoco.mj_step(self.env.model, self.env.data)
+        # 4. 获取模拟后的新状态
+        next_state = self.env._get_state()
+        # 5. 渲染 (如果需要)
+        if self.env.render_mode:
+            self.env.render()
+        return next_state
         
- 
+
     def is_running(self):
         return self.env.viewer.is_running()
     
@@ -252,6 +293,16 @@ if __name__ == "__main__":
     NUM_JOINTS = args.u_dim # 你的机器人关节数量
     use_pinocchio = False
 
+    config_dict={
+        'suffix' : args.suffix,
+        'env_name': args.env,
+        'method' : args.model,
+        'use_KEM' : False,
+        'use_nosie': True,
+        'traj_name' : 'FigStar'  # 使用Fig8\FigStar轨迹进行测试
+    }
+    config = Config( **config_dict)
+    
     if not use_pinocchio:
         # 创建生成器实例
         traj_generator = CartesianTrajectoryGenerator(
@@ -260,14 +311,14 @@ if __name__ == "__main__":
             num_joints=NUM_JOINTS,
             idx=1, 
             time_horizon = 60, 
-            time_steps_per_sec = 5
+            time_steps_per_sec = 10
         )
         # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
         target_quat = None # 绕X轴旋转90度
         # target_quat = np.array([0, 0, 1, 0]) 
         # 调用generate方法，反解出关节角度
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name='Fig8',  # Circle, Fig8
+            traj_name = config_dict['traj_name'],  # Circle, Fig8
             target_orientation=target_quat
         )
     else:
@@ -295,7 +346,7 @@ if __name__ == "__main__":
         ])
         # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name='Fig8',  # Circle, Fig8
+            traj_name = config_dict['traj_name'],  # Circle, Fig8
             target_orientation_matrix=target_orientation
         )
     
@@ -304,7 +355,7 @@ if __name__ == "__main__":
     model.double()
     load_model_path = args.output_dir + "/best_model.pt"
     model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
-    MPC_Controller = MPCController(model, args)
+    MPC_Controller = MPCController_UKF(model, args)
 
     try:
         # 实例化播放器
@@ -315,7 +366,8 @@ if __name__ == "__main__":
             cartesian_points=cartesian_points,
             joint_angle_traj=joint_angle_traj,
             num_joints = NUM_JOINTS,
-            draw_num = 300
+            draw_num = 300,
+            config = config
         )
         # 启动
         test.run_loop()

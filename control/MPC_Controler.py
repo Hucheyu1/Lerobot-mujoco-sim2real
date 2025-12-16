@@ -10,7 +10,7 @@ class MPCController:
         self.device = args.device
         self.args = args
         #  ==== 系统参数 ==== 
-        self.obs_num = 3  #  可观测量 3位置，8位置与角度
+        self.obs_num = 8  #  可观测量 3位置，8位置与角度
         self.x_dim = args.x_dim  #  可观测量 3位置，8位置与角度
         self.Ad = net.lA.weight.cpu().detach().numpy() # (32, 32)
         self.Bd = net.lB.weight.cpu().detach().numpy() # (32, 5)
@@ -173,3 +173,98 @@ class MPCController:
         u_t = torch.DoubleTensor(u).to(self.device)
         x_next = self.net.koopman_operation(x_t, u_t)
         return x_next
+    
+class MPCController_UKF(MPCController):
+    def __init__(self, net, args):
+        """
+        继承 MPC_KF 的初始化，包含 Koopman 模型、C矩阵、MPC solver、KF/UKF噪声协方差等。
+        """
+        super().__init__(net, args)  # 调用父类初始化
+        n = self.Nkoopman
+        # UKF 特有参数
+        self.alpha = 1e-2    # UKF 参数: 控制 sigma 点分布宽度 1e-3 ~ 1
+        self.beta = 2.0        # UKF 参数: 对高斯分布最优
+        self.kappa = 0  # UKF 参数: 二阶扩展项 0 / 3-n
+        self.lambda_ = self.alpha**2 * (self.Nkoopman + self.kappa) - self.Nkoopman
+        # 权重
+        self.Wm = np.full(2 * n + 1, 1 / (2 * (n + self.lambda_)))
+        self.Wc = np.full(2 * n + 1, 1 / (2 * (n + self.lambda_)))
+        self.Wm[0] = self.lambda_ / (n + self.lambda_)
+        self.Wc[0] = self.lambda_ / (n + self.lambda_) + (1 - self.alpha**2 + self.beta)
+        # KF参数
+        # pos_noise = 0.001    # 位置噪声 (m^2)
+        # vel_noise = 0.001    # 角度噪声 (m/s)^2
+        # self.W = np.diag([pos_noise]*3 + [vel_noise]*7 + [0.001]*(37-10))  # 其他状态噪声更低
+        self.W = np.eye(self.Nkoopman) * 0.0001 #  (37,37) 过程噪声协方差 0.0001  0.1
+        self.V = np.eye(self.obs_num) * 0.1   #  (3,3)  观测噪声协方差 0.01  10
+        self.P = np.eye(self.Nkoopman) * 0.001  # (37,37)  初始协方差  self.obs_num
+    def predict(self, z, u):
+        # z: (37, 1) - 当前状态估计 u: (7,) - 控制输入向量
+        n = self.Nkoopman
+        # 对称化 + 正定化
+        # self.P = (self.P + self.P.T) / 2
+        # eigvals, eigvecs = np.linalg.eigh(self.P)
+        # eigvals = np.clip(eigvals, 1e-3, 1e2)
+        # self.P = eigvecs @ np.diag(eigvals) @ eigvecs.T
+        # Cholesky
+        eps = 1e-6
+        Psqrt = np.linalg.cholesky((n + self.lambda_) * self.P + np.eye(n) * eps)
+
+        sigma_pts = np.hstack([z,
+                            z + Psqrt,
+                            z - Psqrt])  # (n, 2n+1) -> (37, 75)
+        # 传播 sigma 点
+        sigma_pts_pred = self.Ad @ sigma_pts + self.Bd @ u.reshape(-1, 1)  # (37, 75)
+        if hasattr(self.net, 'H'):
+            # 根据网络设置选择克罗内克积顺序
+            if self.net.u_z:
+                kron_product = np.kron(u.reshape(-1, 1), sigma_pts) # (224, 75)
+            else:
+                kron_product = np.kron(sigma_pts, u.reshape(-1, 1)) # (224, 75)
+            # 添加双线性项
+            sigma_pts_pred += self.Hd @ kron_product
+
+        sigma_pts_pred = sigma_pts_pred.T  # (75, 37) 
+        # 均值
+        z_pred = np.sum(self.Wm[:, None] * sigma_pts_pred, axis=0) # (37,)
+        # 协方差
+        dz = sigma_pts_pred - z_pred.T  # (75, 37)
+        P_pred = dz.T @ (self.Wc[:, None] * dz) + self.W  # (37, 37)
+
+        self.z_ = z_pred.reshape(-1, 1)
+        self.P = P_pred
+
+        return self.z_, sigma_pts_pred
+
+    def update_kf(self, x_meas, z, u):
+        """UKF 更新步骤"""
+        _, sigma_pts_pred = self.predict(z, u)
+        m = self.obs_num
+
+        # 获取观测 sigma 点
+        sigma_tensor = torch.tensor(sigma_pts_pred, dtype=torch.float64, device=self.device) # (75, 37)
+        sigma_pts_meas = self.net.x_decoder(sigma_tensor)[:, :m].detach().cpu().numpy()  # (75, 3)
+
+        # 观测均值
+        y_pred = sigma_pts_meas.T @ self.Wm  # (3,)
+        # 观测误差打印（调试用）
+        # print("x_meas:", x_meas[:3])
+        # print("y_pred:", y_pred)
+        # print("预测误差:", np.linalg.norm(x_meas[:3] - y_pred))
+        # 协方差
+        dy = sigma_pts_meas - y_pred.T  # (75, 3)
+        dz = sigma_pts_pred - self.z_.T  # (75, 37)
+        Pyy = dy.T @ (self.Wc[:, None] * dy) + self.V  # (3, 3)
+        Pxy = dz.T @ (self.Wc[:, None] * dy)           # (37, 3)
+
+        # 卡尔曼增益 & 更新
+        K = Pxy @ np.linalg.inv(Pyy)  # (37, 3) × (3, 3) → (37, 3)
+        self.z_ += K @ (x_meas.reshape(-1) - y_pred).reshape(-1, 1)  # (37,) + (37,3)×(3,)→(37,)→(37,1)
+        self.P -= K @ Pyy @ K.T # (37,37) - (37,3)×(3,3)×(3,37)→(37,37)
+
+        return self.z_
+    
+    def get_updated_state(self, state_pre, z_last, a):
+        state_full = self.update_kf(state_pre[:self.obs_num], z_last, a.reshape(-1,1)).T
+        state = self.net.x_decoder(torch.DoubleTensor(state_full).to(self.device)).detach().cpu().numpy().reshape(-1) 
+        return state[3:]
