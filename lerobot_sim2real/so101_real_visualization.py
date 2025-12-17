@@ -10,7 +10,7 @@ import rerun as rr
 
 # --- lerobot 框架的导入 ---
 from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
-
+from casadi_ik import Kinematics
 # ==================== 配置常量 ====================
 JOINT_NAMES = [
     "shoulder_pan", "shoulder_lift", "elbow_flex",
@@ -19,7 +19,7 @@ JOINT_NAMES = [
 REAL_ROBOT_PORT = "COM24"
 ZMQ_IP = "127.0.0.1"
 ZMQ_PORT = "5555"
-
+save_path = f"recording_{time.strftime('%Y%m%d_%H%M%S')}.rrd"
 # ==================== Rerun 可视化函数 (来自脚本1) ====================
 def _init_rerun(session_name: str = "lerobot_realtime_control") -> None:
     batch_size = os.getenv("RERUN_FLUSH_NUM_BYTES", "8000")
@@ -28,7 +28,7 @@ def _init_rerun(session_name: str = "lerobot_realtime_control") -> None:
     memory_limit = os.getenv("LEROBOT_RERUN_MEMORY_LIMIT", "10%")
     rr.spawn(memory_limit=memory_limit)
 
-def log_rerun_data(observation: dict[str | Any], action: dict[str | Any]):
+def log_rerun_data(observation: dict[str | Any], action: dict[str | Any],ee_pos_list=None):
     # 遍历观测数据
     for obs, val in observation.items():
         entity_path_prefix = f"observation/{obs}"
@@ -49,9 +49,22 @@ def log_rerun_data(observation: dict[str | Any], action: dict[str | Any]):
         elif isinstance(val, np.ndarray):
             for i, v in enumerate(val):
                 rr.log(f"{entity_path_prefix}/{i}", rr.Scalar(float(v)))
+    # 新增：记录末端位置 3D 点
+    if ee_pos_list is not None:
+        if len(ee_pos_list) > 1:
+            rr.log(
+                "world/trajectory",
+                rr.LineStrips3D([ee_pos_list], colors=[[0, 255, 0]])
+            )
 
 # ==================== 主函数 (融合了两个脚本的优点) ====================
 def main():
+    arm = Kinematics("gripperframe") 
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_script_dir)
+    MODEL_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "so101_new_calib.xml")
+    arm.buildFromMJCF(MODEL_XML_PATH)
+    ee_pos_list = []
     # --- 1. 初始化 ---
     logging.basicConfig(level=logging.WARNING)
     _init_rerun()
@@ -102,9 +115,22 @@ def main():
                 
                 # c. 获取机器人状态的观察值
                 observation = robot.get_observation()
-
+                # d. 核心步骤：将 observation 转化为末端位姿
+                # 假设 observation 中包含了所有关节的角度
+                try:
+                    # 提取当前所有关节的角度（弧度）用于 FK 计算
+                    # 注意：如果 robot_config 设置了 use_degrees=True，获取到的是角度，需转弧度
+                    current_q_deg = [observation[f"{name}.pos"] for name in JOINT_NAMES]
+                    current_q_rad = np.radians(current_q_deg)
+                    
+                    # 调用你的 Kinematics.fk 函数得到 4x4 矩阵
+                    ee_pos,_ = arm.get_ee_pos_and_quat(current_q_rad)
+                except Exception as fk_err:
+                    logging.error(f"FK 计算失败: {fk_err}")
+                    ee_pos = None
+                ee_pos_list.append(ee_pos)
                 # d. 将观察值和动作都记录到 Rerun
-                log_rerun_data(observation, action_to_send)
+                log_rerun_data(observation, action_to_send, ee_pos_list)
 
     except KeyboardInterrupt:
         print("程序被用户中断。")
@@ -112,7 +138,7 @@ def main():
         print(f"在主循环中发生错误: {e}")
     finally:
         # --- 4. 安全清理 (来自脚本2的健壮结构) ---
-        print("正在安全关闭...")
+        print("正在安全关闭...")   
         
         if not socket.closed:
             socket.close()

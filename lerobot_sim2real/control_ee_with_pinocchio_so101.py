@@ -8,6 +8,7 @@ from so101_mujoco import ZMQCommunicator
 import os
 import math
 import mujoco_viewer
+import matplotlib.pyplot as plt
 # --- 修改后的主仿真类 ---
 joint_offsets = [
     0,    # - (Motor 1 position: +1.49)
@@ -15,7 +16,8 @@ joint_offsets = [
     0,     # - (Motor 3 position: +0.7)
     0,    # - (Motor 4 position: -41.31)
     0,      # - (Motor 5 position: -0.7)
-    -31.97     # - (Motor 6 position: +4.48)
+    # -31.97     # - (Motor 6 position: +4.48)
+    -30
 ]
 
 def sim_to_real(q_sim_deg, offsets):
@@ -109,10 +111,10 @@ class CartesianTrajectoryGenerator:
                 z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
                 y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
             else: # X-Y平面
-                a = 0.2 * self.traj_scale 
-                b = 0.2 * self.traj_scale
-                z = 0.05 * np.ones((len(t_param), 1))
-                x = np.expand_dims(0.25 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
+                a = 0.25 * self.traj_scale 
+                b = 0.25 * self.traj_scale
+                z = 0.055 * np.ones((len(t_param), 1))
+                x = np.expand_dims(0.35 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
                 y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
         
@@ -130,6 +132,66 @@ class CartesianTrajectoryGenerator:
                 x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
                 y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
+        elif traj_name == 'FigStar':
+            # --- 1. 定义几何参数 ---
+            # 外部圆（五角星的五个尖角所在圆）的参数
+            a = 0.22 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
+            center_x, center_y, center_z = 0.35, 0.0, 0.055 # 统一中心点
+            # 定义五角星的半径和中心点
+            radius = a         # 外部半径（尖角到中心）
+            # 根据 self.idx 确定 2D 形状的中心偏移
+            if self.idx == 1:
+                 # Y-Z 平面：形状中心是 (center_y, center_z)
+                center_prime_0 = center_y
+                center_prime_1 = center_z
+            else:
+                # X-Y 平面：形状中心是 (center_x, center_y)
+                center_prime_0 = center_x
+                center_prime_1 = center_y      
+            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
+            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
+            Star_points_2D = np.zeros((11, 2))
+            for i in range(5):
+                # 尖角 (Outer Points)
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2) 
+                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
+                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
+                
+                # 凹陷点 (Inner Points)
+                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
+                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
+                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
+            # 闭合轨迹：第 11 个点 = 第 1 个点
+            Star_points_2D[-1, :] = Star_points_2D[0, :]
+            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
+            # 计算总时间步数
+            num_steps = len(t_param) # 使用您的 t 或 self.time_vector 
+            # 假设轨迹分段均匀 (10个线段)
+            num_segments = 10 
+            refs = np.zeros((num_steps, 2))
+            # 计算每段轨迹包含的步数
+            each_num = num_steps // num_segments
+            current_step = 0
+            for i in range(num_segments):
+                start_point = Star_points_2D[i, :]
+                end_point = Star_points_2D[i + 1, :]
+                # 确保最后一段占满剩余所有步数
+                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
+                for j in range(num_interp_points):
+                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
+                    
+                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
+                current_step += num_interp_points
+            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
+            if self.idx==1:
+                x = center_x * np.ones((num_steps, 1)) 
+                y = refs[:, 0].reshape(-1, 1) # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1) # Z 对应 2D 坐标的第二个分量 (y')
+            else:
+                x = refs[:, 0].reshape(-1, 1) 
+                y = refs[:, 1].reshape(-1, 1) 
+                z = center_z * np.ones((num_steps, 1))    
+            xyz_coords = np.concatenate( (x, y, z), axis = 1)
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
         
@@ -160,7 +222,7 @@ class CartesianTrajectoryGenerator:
         return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
 
 class Test(mujoco_viewer.CustomViewer):
-    def __init__(self, path, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num):
+    def __init__(self, path, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num, use_noise=False):
         """
         初始化参数
         :param path: XML 模型路径
@@ -174,7 +236,7 @@ class Test(mujoco_viewer.CustomViewer):
         
         self.path = path
         self.communicator = communicator
-        
+        self.use_noise = use_noise
         # 保存轨迹数据
         self.cartesian_points = cartesian_points
         self.joint_angle_traj = joint_angle_traj
@@ -183,7 +245,7 @@ class Test(mujoco_viewer.CustomViewer):
         # 轨迹播放进度计数器
         self.traj_index = 0
         self.total_frames = len(joint_angle_traj)
-        
+        self.actual_traj = []
         # 预计算采样步长 (防止点太多卡顿)
         # 保证屏幕上最多显示 300-500 个红点
         self.draw_step = max(1, len(cartesian_points) // draw_num)
@@ -208,6 +270,15 @@ class Test(mujoco_viewer.CustomViewer):
         self.return_traj = None     # 存储生成的回归路径
         self.return_index = 0       # 回归播放进度
         self.return_duration = 2.0  # 回归过程耗时 2秒
+
+        # --- 关节和末端执行器定义 ---
+        self.joint_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
+        self.joint_ids = [self.model.joint(name).id for name in self.joint_names]
+        
+        try:
+            self.ee_site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "gripperframe")
+        except ValueError:
+            raise ValueError("在模型中未找到名为 'gripper' 的 site。请检查XML文件。")
 
     def runBefore(self):
         """
@@ -248,14 +319,29 @@ class Test(mujoco_viewer.CustomViewer):
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
         if self.traj_index < self.total_frames:
-            # 设置当前帧的关节角度
-            self.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index][:self.num_joints]
-            
+            if self.use_noise:
+                # 定义扰动的最大强度（例如：±0.01 弧度）
+                angle_disturbance_magnitude = 0.02
+                # 选项 A: 扰动关节位置 (qpos)
+                # qpos 尺寸为 (nq,)，即广义坐标位置维度
+                # 生成一个随机扰动角度 (均匀分布在 [-magnitude, +magnitude])
+                angle_disturb = np.random.uniform(
+                    low=-angle_disturbance_magnitude,
+                    high=angle_disturbance_magnitude,
+                    size=self.num_joints  # 扰动作用于所有关节位置
+                )
+                # 将扰动加到当前的关节角度上
+                self.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index][:self.num_joints] + angle_disturb
+            else:
+                self.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index][:self.num_joints]
             # 前向动力学计算
             mujoco.mj_forward(self.model, self.data)
-            
+            qpos = self.data.qpos[self.joint_ids].copy()
+            # qvel = self.data.qvel[self.joint_ids].copy()
+            ee_pos = self.data.site_xpos[self.ee_site_id].copy()
+            self.actual_traj.append(np.concatenate([ee_pos, qpos]).astype(np.float32))
             # 绘制当前目标点 (绿色大球)
-            current_pos = self.cartesian_points[self.traj_index]
+            current_pos = ee_pos
             if self.handle.user_scn.ngeom <= self.handle.user_scn.maxgeom:
                 mujoco.mjv_initGeom(
                     self.handle.user_scn.geoms[self.handle.user_scn.ngeom],
@@ -276,7 +362,7 @@ class Test(mujoco_viewer.CustomViewer):
         # --- 阶段 2: 主轨迹刚结束，生成回归路径 (只执行一次) ---
         elif self.return_traj is None and self.home_qpos is not None:
             print("主轨迹播放完毕，生成回归 Home 的路径...")
-            
+            np.save(os.path.join(os.path.dirname(os.path.abspath(__file__)),"traj_noise.npy"),np.array(self.actual_traj))
             start_qpos = self.joint_angle_traj[-1][:self.num_joints]  # 当前位置
             end_qpos = self.home_qpos[:self.num_joints]  # 目标位置
             
@@ -329,8 +415,9 @@ if __name__ == "__main__":
     SCENE_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml")
     ARM_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "so101_new_calib.xml")
     EE_SITE_NAME = 'gripperframe'
-    NUM_JOINTS = 6
-
+    NUM_JOINTS = 5
+    use_noise =  True
+    use_plot = False
     # --- 步骤 1: 初始化MuJoCo环境 ---
     try:
         model = mujoco.MjModel.from_xml_path(SCENE_XML_PATH)
@@ -346,7 +433,7 @@ if __name__ == "__main__":
         num_joints=NUM_JOINTS,
         idx = 0,
         time_horizon=60,
-        time_steps_per_sec=5
+        time_steps_per_sec=10
     )
     # --- 步骤 3: 一行代码生成所有轨迹数据 ---
     # 角度（度）
@@ -358,7 +445,7 @@ if __name__ == "__main__":
     # 计算 cos 和 sin 值
     c = math.cos(angle_radians)
     s = math.sin(angle_radians)
-    aix = "Y"
+    aix = "X"
     # 构建绕 X 轴旋转的矩阵
     if aix == "X":
         target_orientation = np.array([
@@ -382,26 +469,56 @@ if __name__ == "__main__":
         ])
     # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
     cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name='Fig8',  # Circle, Fig8
+        traj_name='FigStar',  # Circle, Fig8, FigStar
         target_orientation_matrix=target_orientation
     )
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
 
     try:
-        # 实例化播放器
-        test = Test(
-            path=SCENE_XML_PATH,
-            communicator = zmq_communicator, # 传入你的通信器
-            cartesian_points=cartesian_points,
-            joint_angle_traj=joint_angle_traj,
-            num_joints = NUM_JOINTS,
-            draw_num = 300
-        )
-        # 启动
-        test.run_loop()
+        if not use_plot:
+            # 实例化播放器
+            test = Test(
+                path=SCENE_XML_PATH,
+                communicator = zmq_communicator, # 传入你的通信器
+                cartesian_points=cartesian_points,
+                joint_angle_traj=joint_angle_traj,
+                num_joints = NUM_JOINTS,
+                draw_num = 300,
+                use_noise = use_noise
+            )
+            # 启动
+            test.run_loop()
 
     except KeyboardInterrupt:
         print("仿真程序被用户中断")
     finally:
         # 清理通信资源
         zmq_communicator.cleanup()
+        if use_plot:
+            traj_noise = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)),"traj_noise.npy"))
+            pos = traj_noise[:,:3]
+            fig, ax= plt.subplots(figsize=(10, 8))
+            ax.plot(
+                    cartesian_points[:, 0], cartesian_points[:, 1],
+                    color='black', 
+                    alpha = 1.0,
+                    label='IBKN-δMPC-UKF'
+                )
+            ax.plot(
+                    pos[:, 0], pos[:, 1],
+                    color='red', 
+                    alpha = 1.0,
+                    label='IBKN-δMPC'
+                )
+            # 建议：添加图例、标签和网格以便观察
+            ax.set_xlabel('X Position',fontsize=18)
+            ax.set_ylabel('Y Position',fontsize=18)
+            # 3. 设置刻度字体大小
+            ax.tick_params(axis='both', which='major', labelsize=16)
+            ax.legend(fontsize=18)
+            ax.grid(True)
+            plt.savefig(
+                os.path.join(os.path.join(os.path.dirname(os.path.abspath(__file__))), "traj.png"), format="png",\
+                    dpi=500, bbox_inches='tight'
+            )
+            plt.show()

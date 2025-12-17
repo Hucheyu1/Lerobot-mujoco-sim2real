@@ -165,7 +165,41 @@ class Kinematics:
             dof[:len(sol_q)] = self.init_data
             
             raise e
+    def fk(self, q):
+        """
+        正运动学求解：输入关节角，输出末端执行器的位姿矩阵 T (4x4)
+        :param q: 关节角度列表或数组
+        :return: np.ndarray (4x4)
+        """
+        # 确保输入是 numpy 数组
+        q = np.array(q)
+        
+        # 1. 更新正运动学
+        pin.forwardKinematics(self.model, self.data, q)
+        # 2. 更新 Frame 位置（这步对于获取特定 frame 的位姿必不可少）
+        pin.updateFramePlacements(self.model, self.data)
+        
+        # 3. 获取位姿矩阵 SE3 对象
+        # self.ee_id 在 createSolver 中已经获取过了
+        geom_pose = self.data.oMf[self.ee_id]
+        
+        # 将 Pinocchio 的 SE3 对象转换为标准的 4x4 矩阵
+        T = np.eye(4)
+        T[:3, :3] = geom_pose.rotation
+        T[:3, 3] = geom_pose.translation
+        
+        return T
 
+    def get_ee_pos_and_quat(self, q):
+        """
+        辅助函数：获取末端位置和四元数（方便 Rerun 或其他可视化工具使用）
+        """
+        T = self.fk(q)
+        pos = T[:3, 3]
+        # 使用 pinocchio 转换旋转矩阵到四元数 [x, y, z, w]
+        quat = pin.Quaternion(T[:3, :3]).coeffs() 
+        return pos, quat
+    
 if __name__ == "__main__":
     
     arm = Kinematics("gripperframe") 
