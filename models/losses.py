@@ -17,10 +17,12 @@ def rank_loss(model, threshold=1.0):
     return L2
 
 def spectral_radius_loss(model):
-    A = model.lA.weight
-    eigvals = torch.linalg.eigvals(A)
-    return torch.sum(torch.clamp(torch.abs(eigvals) - 1.0, min=0.0))
-
+    if hasattr(model, "lA"):
+        A = model.lA.weight
+        eigvals = torch.linalg.eigvals(A)
+        return torch.sum(torch.clamp(torch.abs(eigvals) - 1.0, min=0.0))
+    else:
+        return torch.tensor(0.0)
 # 稀疏正则项损失 
 def sparsity_loss(model):
     """
@@ -108,7 +110,7 @@ def k_linear_loss(
         beta *= gamma
         x0_emb = x1_emb_pred
 
-    total_loss = koopman_loss + dis_loss + 0.25 * angle_loss + recon_bool * recon_loss
+    total_loss = koopman_loss + 0.25 * pred_loss + recon_bool * recon_loss
     stable_Loss = spectral_radius_loss(net)
     H_Loss = sparsity_loss(net)
     total_loss = total_loss / cont #+ λ_spec * stable_Loss + λ_sparse * H_Loss
@@ -116,10 +118,10 @@ def k_linear_loss(
     return dict(
         total_loss = total_loss ,
         koopman_loss=koopman_loss / cont,
-        pred_loss=pred_loss / cont,
+        pred_loss = 0.25 * pred_loss / cont,
         recon_loss=recon_loss / cont,
         dis_loss =  dis_loss / cont,
-        angle_loss = 0.25 * angle_loss / cont,
+        angle_loss = angle_loss / cont,
         stable_Loss = stable_Loss * λ_spec,
         H_Loss = H_Loss * λ_sparse
     )
@@ -265,6 +267,8 @@ def koopformer_loss(
 
     # 4. 执行多步开环预测循环
     z_current = z_t  # 用于循环迭代的潜在状态
+    λ_spec = 1e-3 # 1e-3
+    λ_sparse = 1e-9 # 1e-9
     for i in range(pre_length):
         # 当前时间步的索引
         current_time_idx = (seq_len-1) + i
@@ -308,7 +312,9 @@ def koopformer_loss(
     # 5. 计算最终加权平均损失
     total_loss = koopman_loss + dis_loss + 0.25 * angle_loss + recon_bool * recon_loss
     total_loss = total_loss / total_weight
-    # 6. 返回损失字典 (移除了 H_Loss 和 stable_Loss)
+    stable_Loss = spectral_radius_loss(net)
+    H_Loss = sparsity_loss(net)
+    # 6. 返回损失字典  
     return dict(
         total_loss=total_loss,
         koopman_loss=koopman_loss / total_weight,
@@ -316,8 +322,8 @@ def koopformer_loss(
         recon_loss=recon_loss / total_weight,  
         dis_loss=dis_loss / total_weight,
         angle_loss=angle_loss / total_weight,
-        stable_Loss = torch.tensor(0.0),
-        H_Loss = torch.tensor(0.0)
+        stable_Loss = stable_Loss * λ_spec,
+        H_Loss = H_Loss * λ_sparse
     )
 
 def koopformer_eval_loss_new(

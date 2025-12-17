@@ -2,21 +2,17 @@ import torch
 import numpy as np
 import torch.nn as nn
 from collections import OrderedDict
-from .base_model import KoopmanNet
+from .base_model import StableKoopmanOperator
 
 def gaussian_init_(n_units, std=1):    
     sampler = torch.distributions.Normal(torch.Tensor([0]), torch.Tensor([std/n_units]))
     Omega = sampler.sample((n_units, n_units))[..., 0]  
     return Omega
 
-class Koopmanlinear(KoopmanNet):
-    def __init__(self, x_dim, u_dim, encode_layers, use_decoder=False):
+class Koopmanlinear(StableKoopmanOperator):
+    def __init__(self, x_dim, u_dim, encode_layers, use_stable=False, use_decoder=False):
 
-        super(KoopmanNet, self).__init__()
-        self.Nkoopman = encode_layers[-1] + x_dim
-        self.u_dim = u_dim
-        self.x_dim = x_dim
-        self.use_decoder = use_decoder
+        super().__init__(x_dim, u_dim, encode_layers, use_stable, use_decoder)
         Layers = OrderedDict()
         for layer_i in range(len(encode_layers)-1):
             Layers["linear_{}".format(layer_i)] = nn.Linear(encode_layers[layer_i],encode_layers[layer_i+1])
@@ -27,21 +23,6 @@ class Koopmanlinear(KoopmanNet):
         self.x_encode_net = nn.Sequential(Layers)
         # 控制输入编码器：恒等映射（直接返回原始控制输入）
         self.u_encode_net = nn.Identity()
-        # koopman矩阵
-        self.lA = nn.Linear(self.Nkoopman, self.Nkoopman,bias=False)
-        self.lA.weight.data = gaussian_init_(self.Nkoopman, std=1)
-        U, _, V = torch.svd(self.lA.weight.data)
-        self.lA.weight.data = torch.mm(U, V.t()) * 0.9
-        self.lB = nn.Linear(self.u_dim, self.Nkoopman, bias=False)
-        # nn.init.xavier_uniform_(self.lB.weight, gain=nn.init.calculate_gain('linear'))
-        # 解码矩阵
-        self.lC = nn.Linear(self.Nkoopman, self.x_dim, bias=False)
-        # 手动初始化权重（单位矩阵 + 零填充）
-        if not self.use_decoder:
-            with torch.no_grad():
-                self.lC.weight.data[:self.x_dim, :self.x_dim] = torch.eye(self.x_dim)
-                self.lC.weight.data[:, self.x_dim:] = 0.0
-            self.lC.weight.requires_grad = False
         
     def x_encoder(self, x):
         feat = self.x_encode_net(x)
@@ -51,9 +32,6 @@ class Koopmanlinear(KoopmanNet):
     def x_decoder(self, x_emb):
         return self.lC(x_emb)
     
-    def koopman_operation(self, x_emb, u_emb):
-        return self.lA(x_emb)+self.lB(u_emb)
-    
     def u_encoder(self, x , u):
         return self.u_encode_net(u)
     
@@ -61,15 +39,19 @@ class Koopmanlinear(KoopmanNet):
         return u_emb    
     
 class KoopmanBlinear(Koopmanlinear):
-    def __init__(self, x_dim, u_dim, encode_layers, u_z):
-        super().__init__(x_dim, u_dim, encode_layers)
+    def __init__(self, x_dim, u_dim, encode_layers, u_z, use_stable):
+        super().__init__(x_dim, u_dim, encode_layers, use_stable)
         # 双线性部分
         self.H = nn.Linear(self.Nkoopman * self.u_dim, self.Nkoopman, bias=False)
-        nn.init.zeros_(self.H.weight)
+        # nn.init.zeros_(self.H.weight)
         self.u_z = u_z
     def koopman_operation(self, x_emb, u_emb):
         # u_emb: u_dim   x_emb:Nkoopman
-        linear_term = self.lA(x_emb) + self.lB(u_emb)
+        if self.use_stable:
+            K = self.get_koopman_matrix_K()
+            linear_term = x_emb @ K.T + self.lB(u_emb)
+        else:
+            linear_term = self.lA(x_emb) + self.lB(u_emb)
         # 双线性项  u_dim*Nkoopman
         if self.u_z:
             z_kron_u = torch.einsum('bi,bj->bij', u_emb, x_emb).reshape(x_emb.shape[0], -1)

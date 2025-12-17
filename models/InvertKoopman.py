@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from .base_model import KoopmanNet
+from .base_model import StableKoopmanOperator
 from torch import nn, Tensor
 
 def gaussian_init_(n_units, std=1):    
@@ -148,7 +148,7 @@ class iMLPNet(nn.Module):
         return x
 
 
-class InvertKoopmanNetLinear(KoopmanNet):
+class InvertKoopmanNetLinear(StableKoopmanOperator):
     def __init__(
             self,
             x_dim,            # 状态维度
@@ -159,10 +159,10 @@ class InvertKoopmanNetLinear(KoopmanNet):
             u_blocks,         # 控制输入编码器块数
             u_channels,       # 控制输入编码器通道数
             u_hiddens,        # 控制输入编码器隐藏层大小
+            use_stable,
             use_decoder=True
     ):
-        super(InvertKoopmanNetLinear, self).__init__()
-        self.use_decoder = use_decoder
+        super().__init__(x_dim, u_dim, [x_channels[-1] * 2], use_stable, use_decoder)
         self.x_dim = x_dim
         self.x_blocks = x_blocks
         self.x_channels = x_channels
@@ -184,23 +184,11 @@ class InvertKoopmanNetLinear(KoopmanNet):
         # 控制输入编码器：恒等映射（直接返回原始控制输入）
         self.u_encode_net = nn.Identity()
 
-        self.x_emb_dim = x_channels[-1]*2
-        self.u_emb_dim = u_channels[-1]*2
-        self.lA = nn.Linear(self.x_emb_dim, self.x_emb_dim, bias=False)
-        self.lA.weight.data = gaussian_init_(self.x_emb_dim, std=1)
-        U, _, V = torch.svd(self.lA.weight.data)
-        self.lA.weight.data = torch.mm(U, V.t()) * 0.9
-        self.lB = nn.Linear(self.u_dim, self.x_emb_dim, bias=False)
-        # nn.init.xavier_uniform_(self.lB.weight, gain=nn.init.calculate_gain('linear'))
-
     def x_encoder(self, x: Tensor):
         return self.x_encode_net(x)
 
     def u_encoder(self, x: Tensor, u: Tensor):
         return self.u_encode_net(u)
-
-    def koopman_operation(self, x_emb: Tensor, u_emb: Tensor):
-        return self.lA(x_emb) + self.lB(u_emb)
 
     def x_decoder(self, x_emb: Tensor):
         return self.x_encode_net.inverse(x_emb)
@@ -219,7 +207,8 @@ class InvertKoopmanNetBLinear(InvertKoopmanNetLinear):
             u_blocks,         # 控制输入编码器块数
             u_channels,       # 控制输入编码器通道数
             u_hiddens,        # 控制输入编码器隐藏层大小
-            u_z
+            u_z,
+            use_stable
     ):
         super().__init__(    
             x_dim,            
@@ -229,17 +218,22 @@ class InvertKoopmanNetBLinear(InvertKoopmanNetLinear):
             u_dim,            
             u_blocks,         
             u_channels,       
-            u_hiddens
+            u_hiddens,
+            use_stable
             )       
         
-        self.H = nn.Linear(self.x_emb_dim * self.u_dim, self.x_emb_dim, bias=False)
-        nn.init.zeros_(self.H.weight)
-        nn.init.xavier_uniform_(self.lB.weight, gain=nn.init.calculate_gain('linear'))
+        self.H = nn.Linear(self.Nkoopman * self.u_dim, self.Nkoopman, bias=False)
+        # nn.init.zeros_(self.H.weight)
+        # nn.init.xavier_uniform_(self.lB.weight, gain=nn.init.calculate_gain('linear'))
         self.u_z = u_z
 
     def koopman_operation(self, x_emb, u_emb):
         # u_emb: u_dim   x_emb:Nkoopman
-        linear_term = self.lA(x_emb) + self.lB(u_emb)
+        if self.use_stable:
+            K = self.get_koopman_matrix_K()
+            linear_term = x_emb @ K.T + self.lB(u_emb)
+        else:
+            linear_term = self.lA(x_emb) + self.lB(u_emb)
         # 双线性项  u_dim*Nkoopman
         if self.u_z:
             z_kron_u = torch.einsum('bi,bj->bij', u_emb, x_emb).reshape(x_emb.shape[0], -1)

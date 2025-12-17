@@ -10,6 +10,7 @@ def init_model(args):
             args.x_dim,
             args.u_dim,
             args.layers,
+            args.use_stable
         ).to(args.device)
         return model 
     elif args.model == "DBKN":
@@ -17,7 +18,8 @@ def init_model(args):
             args.x_dim,
             args.u_dim,
             args.layers,
-            args.u_z
+            args.u_z,
+            args.use_stable
         ).to(args.device)
         return model
     elif args.model == "Koopformer":
@@ -82,6 +84,7 @@ def init_model(args):
             args.u_blocks,
             args.u_channels,
             args.u_hiddens,
+            args.use_stable
         ).to(args.device)
         return model
     elif args.model == "IBKN":
@@ -94,7 +97,8 @@ def init_model(args):
             args.u_blocks,
             args.u_channels,
             args.u_hiddens,
-            args.u_z
+            args.u_z,
+            args.use_stable
         ).to(args.device)
         return model          
 
