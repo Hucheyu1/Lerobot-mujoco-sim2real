@@ -83,7 +83,7 @@ def k_linear_loss(
     beta = 1.0
     cont = 0.0
 
-    λ_rank = 0 # 0 1e-8
+    λ_pred = 1.5 if type(net).__name__.startswith('Invert') else 1.0
     λ_spec = 1e-3 # 1e-3
     λ_sparse = 1e-9 # 1e-9
     x0_emb = net.x_encoder(x0)
@@ -110,16 +110,16 @@ def k_linear_loss(
         beta *= gamma
         x0_emb = x1_emb_pred
 
-    total_loss = koopman_loss + 0.25 * pred_loss + recon_bool * recon_loss
+    total_loss = koopman_loss + λ_pred * pred_loss + recon_bool * recon_loss 
     stable_Loss = spectral_radius_loss(net)
     H_Loss = sparsity_loss(net)
-    total_loss = total_loss / cont #+ λ_spec * stable_Loss + λ_sparse * H_Loss
+    total_loss = total_loss / cont + λ_spec * stable_Loss + λ_sparse * H_Loss
         
     return dict(
         total_loss = total_loss ,
         koopman_loss=koopman_loss / cont,
-        pred_loss = 0.25 * pred_loss / cont,
-        recon_loss=recon_loss / cont,
+        pred_loss = λ_pred * pred_loss / cont,
+        recon_loss = recon_loss / cont,
         dis_loss =  dis_loss / cont,
         angle_loss = angle_loss / cont,
         stable_Loss = stable_Loss * λ_spec,

@@ -43,7 +43,7 @@ class KoopmanBlinear(Koopmanlinear):
         super().__init__(x_dim, u_dim, encode_layers, use_stable)
         # 双线性部分
         self.H = nn.Linear(self.Nkoopman * self.u_dim, self.Nkoopman, bias=False)
-        # nn.init.zeros_(self.H.weight)
+        nn.init.zeros_(self.H.weight)
         self.u_z = u_z
     def koopman_operation(self, x_emb, u_emb):
         # u_emb: u_dim   x_emb:Nkoopman

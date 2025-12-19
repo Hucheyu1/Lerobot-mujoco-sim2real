@@ -19,7 +19,7 @@ class Args:
                                 help="运行模式, 可选值: train / test (默认: train)")
         self.parser.add_argument("--env", type=str, default="SOARM101",
                                 help="环境名称（用于路径生成）(默认: SOARM101)")
-        self.parser.add_argument("--suffix", type=str, default="12_12",
+        self.parser.add_argument("--suffix", type=str, default="12_13",
                                 help="实验后缀（用于路径区分）")
         self.parser.add_argument("--seed", type=int, default=42,
                                 help="随机种子 (默认: 42)")
@@ -106,15 +106,15 @@ class Args:
         self.args.data_dir_load_val = os.path.join(project_root, self.args.env, "data", f"val_data_{self.args.test_samples}_{self.args.test_steps}.npy")
 
         # 网络层维度配置
-        self.args.layers = [self.args.x_dim, 32, 32, 32, 16]  # 调整输出维度以适应SOARM101
+        self.args.layers = [self.args.x_dim, 64, 64, 64, 24]  # 调整输出维度以适应SOARM101
         """Koopman线性/双线性网络的全连接层维度（输入维度=x_dim)"""
 
         # 可逆网络参数
         self.args.x_blocks = [2, 2]
         """可逆网络x分支的块数"""
-        self.args.x_channels = [10, 16]
+        self.args.x_channels = [12, 16]
         """可逆网络x分支的通道数"""   
-        self.args.x_hiddens = [32, 64]
+        self.args.x_hiddens = [64, 128]
         """可逆网络x分支的隐藏层维度"""
         self.args.u_blocks = [2, 2]
         """可逆网络u分支的块数"""
@@ -132,8 +132,8 @@ class Args:
         self.args.kan_params = None
         # LSTM网络
         self.args.lstm_seq_len = 6
-        self.args.LSTM_Hidden = 32
-        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 32, 32, 16]
+        self.args.LSTM_Hidden = 64
+        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 64, 64, 24]
 
     def __getattr__(self, name):
         """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""

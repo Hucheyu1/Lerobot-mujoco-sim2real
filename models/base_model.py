@@ -68,6 +68,7 @@ class StableKoopmanOperator(KoopmanNet):
             self.lA.weight.data = torch.mm(U, V.t()) * 0.9
         # 控制矩阵
         self.lB = nn.Linear(u_dim, self.Nkoopman, bias=False)
+        nn.init.xavier_uniform_(self.lB.weight)
         # 解码矩阵 C：将潜在状态 z 解码回原始状态 x
         if not use_decoder:
             self.lC = nn.Linear(self.Nkoopman, self.x_dim, bias=False)

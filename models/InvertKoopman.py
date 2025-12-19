@@ -223,8 +223,7 @@ class InvertKoopmanNetBLinear(InvertKoopmanNetLinear):
             )       
         
         self.H = nn.Linear(self.Nkoopman * self.u_dim, self.Nkoopman, bias=False)
-        # nn.init.zeros_(self.H.weight)
-        # nn.init.xavier_uniform_(self.lB.weight, gain=nn.init.calculate_gain('linear'))
+        nn.init.zeros_(self.H.weight)
         self.u_z = u_z
 
     def koopman_operation(self, x_emb, u_emb):

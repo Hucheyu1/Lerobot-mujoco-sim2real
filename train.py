@@ -168,6 +168,9 @@ def train(
 
             # Backward
             loss.backward()
+            # === 【修改 3】 梯度裁剪 ===
+            # 这能防止某一个 batch 数据异常导致更新步长太大把模型踢飞
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
 
@@ -365,7 +368,7 @@ def main(args):
 if __name__ == "__main__":
     args = Args()
     if args.model == 'all':
-        methods = ["DKUC","DBKN","IKN","IBKN"]
+        methods = ["IBKN","DBKN","DKUC","IKN",]
         # methods = ["IKN","IBKN",
         #            "Koopformer","KANKoopman",
         #            "Koopformer_KAN","KoopmanLSTMlinear","KoopmanLSTMlinear_KAN",
