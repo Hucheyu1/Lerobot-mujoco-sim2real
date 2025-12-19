@@ -37,7 +37,7 @@ class Args:
                                 choices=["sin", "random", "chirp", "all"],
                                 help="测试数据类型, 可选值: sin / random / chirp / all (默认: all)")
         # 预测参数
-        self.parser.add_argument("--pre_length", type=int, default=5,
+        self.parser.add_argument("--pre_length", type=int, default=10,
                                 help="预测长度 (默认: 5)")
 
         # 网络设计参数
