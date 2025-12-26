@@ -4,7 +4,7 @@ import mujoco
 import numpy as np
 from utility.ZMQ import ZMQCommunicator
 from control.TrajectoryGenerator import CartesianTrajectoryGenerator,CartesianTrajectoryGenerator_pinocchio
-from control.MPC_Controler import MPCController, MPCController_UKF
+from control.MPC_Controler import MPCController_KESO
 from control.config import Config
 import time
 import math
@@ -126,7 +126,7 @@ class Test:
         # 对于静止或慢速运动的机器人，它主要就是重力力矩
         step_start = time.time()
 
-        self.env.data.qfrc_applied[:] =  self.env.data.qfrc_bias[:]
+        # self.env.data.qfrc_applied[:] =  self.env.data.qfrc_bias[:]
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
         if self.traj_index < self.total_frames - self.H:
@@ -219,7 +219,7 @@ class Test:
             ref_flat = ref_traj_segment.flatten().reshape(-1, 1)
 
         z0 = self.mpc_controller.Psi_o(self.state_tensor) # (32,1)
-        z_last = z0
+        self.z_last = z0
         if self.mpc_controller.args.MPC_type == 'mpc':
             p = np.vstack([ref_flat, z0.reshape(-1, 1)])
         if self.mpc_controller.args.MPC_type == 'delta_mpc':
@@ -230,7 +230,7 @@ class Test:
         self.mpc_controller.u_prev = u # 保存当前控制以备下次使用
 
         # --- 3. 应用控制并步进仿真 ---
-        s_next= self.runstep(a, z_last) # (8,)
+        s_next= self.runstep(a, self.z_last) # (8,)
         self.actual_traj.append(s_next)
         self.u_list.append(u)
         # 处理时间序列
@@ -239,15 +239,36 @@ class Test:
             s_next = self.state0.copy()
 
         self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8) / (1, 5, 8)
+        
 
     def runstep(self,action,z_last):
         # config.use_nosie
         target_velocity = action[:self.env.udim]
         self.env.data.ctrl[:self.env.udim] = target_velocity
-
+        # --- 新增逻辑：施加负载力 ---
+        if self.config.use_payload:
+            # 假设负载 1kg，重力加速度 9.81
+            payload_mass = self.config.use_payload
+            g = 9.81
+            force = payload_mass * g
+            
+            # 获取末端 ID
+            ee_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, "gripperframe")
+            
+            # xfrc_applied 格式: [fx, fy, fz, tx, ty, tz] (力 + 力矩)
+            # 施加一个向下的力 (Z轴负方向)
+            self.env.data.xfrc_applied[ee_id] = [0, 0, -force, 0, 0, 0]
+        else:
+            # 如果没有负载，记得清零，因为 data 里的数据会残留
+            ee_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, "gripperframe")
+            self.env.data.xfrc_applied[ee_id] = [0, 0, 0, 0, 0, 0]
+        # 执行物理模拟
+        for _ in range(self.env.frame_skip):
+            mujoco.mj_step(self.env.model, self.env.data)
+        state_full = None
         if self.config.use_nosie:
             # 定义扰动的最大强度（例如：±0.01 弧度）
-            angle_disturbance_magnitude = 0.01  
+            angle_disturbance_magnitude = 0.02  
             # 选项 A: 扰动关节位置 (qpos)
             # qpos 尺寸为 (nq,)，即广义坐标位置维度
             # 生成一个随机扰动角度 (均匀分布在 [-magnitude, +magnitude])
@@ -262,11 +283,14 @@ class Test:
             # 否则 MuJoCo 的状态（如速度、雅可比矩阵等）将不一致。
             mujoco.mj_forward(self.env.model, self.env.data)
         if self.config.use_KEM:
-            self.env.data.qpos[self.env.joint_ids] = self.mpc_controller.get_updated_state(self.env._get_state(), z_last, action)
+            self.env.data.qpos[self.env.joint_ids], state_full = self.mpc_controller.get_updated_state_KF(self.env._get_state(), z_last, action)
             mujoco.mj_forward(self.env.model, self.env.data)
-        # 3. 执行物理模拟
-        for _ in range(self.env.frame_skip):
-            mujoco.mj_step(self.env.model, self.env.data)
+        if self.config.use_eso:
+            if state_full is None:
+                state_full = self.mpc_controller.Psi_o(torch.DoubleTensor(self.env._get_state()).unsqueeze(0)) 
+            self.env.data.qpos[self.env.joint_ids] = self.mpc_controller.get_updated_state_ESO(state_full, self.state_all_ref[self.traj_index + 1])
+            mujoco.mj_forward(self.env.model, self.env.data)
+
         # 4. 获取模拟后的新状态
         next_state = self.env._get_state()
         # 5. 渲染 (如果需要)
@@ -297,8 +321,10 @@ if __name__ == "__main__":
         'suffix' : args.suffix,
         'env_name': args.env,
         'method' : args.model,
-        'use_KEM' : False,
-        'use_nosie': True,
+        'use_KEM' : True,
+        'use_nosie': False,
+        'use_payload': 0,  # 0,1,2
+        'use_eso': False,
         'traj_name' : 'FigStar'  # 使用Fig8\FigStar轨迹进行测试
     }
     config = Config( **config_dict)
@@ -355,7 +381,8 @@ if __name__ == "__main__":
     model.double()
     load_model_path = args.output_dir + "/best_model.pt"
     model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
-    MPC_Controller = MPCController_UKF(model, args)
+    MPC_Controller = MPCController_KESO(model, args)
+    # MPC_Controller.verify_eso_stability()
 
     try:
         # 实例化播放器

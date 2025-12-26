@@ -1,6 +1,7 @@
 import casadi as ca
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
 
 class MPCController:
     def __init__(self, net, args):
@@ -10,7 +11,7 @@ class MPCController:
         self.device = args.device
         self.args = args
         #  ==== 系统参数 ==== 
-        self.obs_num = 8  #  可观测量 3位置，8位置与角度
+        self.obs_num = args.x_dim  #  可观测量 3位置，8位置与角度
         self.x_dim = args.x_dim  #  可观测量 3位置，8位置与角度
         self.Ad = net.lA.weight.cpu().detach().numpy() # (32, 32)
         self.Bd = net.lB.weight.cpu().detach().numpy() # (32, 5)
@@ -18,7 +19,8 @@ class MPCController:
         if hasattr(net, 'H'):  # 检查是否存在该层
             self.H_hat_list = net.get_Hi_numpy()
             self.Hd = net.H.weight.cpu().detach().numpy() # (32, 224)
-        # self.Cd = net.lC.weight.cpu().detach().numpy() # (32, 5)
+        if hasattr(net, 'lC'):
+            self.C = net.lC.weight.cpu().detach().numpy() # (8, 32)
         self.B_d_pinv = np.linalg.pinv(self.Bd)
 
         # ==== MPC 参数 ====
@@ -149,7 +151,7 @@ class MPCController:
         u_opt = np.array(sol['x']).reshape(self.H, self.u_dim) # (10,7)
         u0 = u_opt[0] + self.u_eso + self.u_prev# (7,) + (1, 7)
         # 记录控制量并返回
-        a = np.clip(u0, -0.5, 0.5)
+        a = np.clip(u0, -2.0, 2.0)
         if self.MPC_type == 'delta_mpc':
             self.u_prev = a.copy()
         return u0, a
@@ -174,6 +176,198 @@ class MPCController:
         x_next = self.net.koopman_operation(x_t, u_t)
         return x_next
     
+class MPCController_KESO(MPCController):
+    def __init__(self, net, args):
+        """
+        继承 MPC_KF 的初始化，包含 Koopman 模型、C矩阵、MPC solver、KF/UKF噪声协方差等。
+        """
+        super().__init__(net, args)  # 调用父类初始化
+        # ==== ESO参数 ====
+        self.d_hat = np.zeros(self.Nkoopman)
+        # 自适应增益系数
+        self.gamma1 = 1.2  # 状态增益上限 0.2  0.5
+        self.gamma2 = 0.5  # 扰动增益上限 0.01 0.1
+        # KF参数
+        self.W = np.eye(self.Nkoopman) * 0.001 #  (37,37) 过程噪声协方差 0.0001  0.1
+        # 如果系统本身非常不确定，增加 Q 的值；如果你对模型有很高的信心，可以减小 Q 的值。
+        self.V = np.eye(self.obs_num) * 0.1   #  (3,3)  观测噪声协方差 0.01  10
+        # 如果你知道传感器的噪声较大，可以增加 R 的值；如果传感器非常精确，则可以减小 R 的值。
+        self.P = np.eye(self.Nkoopman) * 0.1  # (37,37)  初始协方差
+
+    def predict(self, z , u):
+        # 预测步骤
+        self.z_ = np.dot(self.Ad, z) + np.dot(self.Bd, u) # (37,37)*(37,1)+(37,7)*(7,1)
+        # 添加双线性项（若存在）
+        if hasattr(self.net, 'H'):
+            kron = np.kron(u, z) if self.net.u_z else np.kron(z, u)
+            self.z_ += np.dot(self.Hd, kron)
+        self.P = np.dot(np.dot(self.Ad, self.P), self.Ad.T) + self.W  # 协方差更新
+        return self.z_
+        
+    def update_kf(self, x , z, u):
+        # 更新步骤
+        self.predict(z, u)
+        # 计算卡尔曼增益
+        S = np.dot(np.dot(self.C, self.P), self.C.T) + self.V  # 创新协方差 () (3,37)(37,37)(37,3)=(3,3)
+        K = np.dot(np.dot(self.P, self.C.T), np.linalg.inv(S))  # 卡尔曼增益(37,37)(37,3)(3,3)=(37,3)
+        # 更新状态
+        x = x - self.C @ self.z_  #  (3,1) - (3,37) (37,1)
+        self.z_ = self.z_ + K @ x  #  (37,1) + (37,3)*(3,1)
+        self.P = (np.eye(self.Nkoopman) - K @ self.C) @ self.P
+        return self.z_  # 返回滤波后的位置估计  
+    
+    def update_eso(self, z_pred, y_true):
+        """更新扩张状态观测器"""
+        # 预测步骤
+        # z_pred = self.Ad @ self.z0 + self.Bd @ self.u_prev + self.d_hat
+        y_pred = self.C @ z_pred   # (3,37)*(37,)=(3,)
+        # 校正步骤
+        error = y_true[:self.obs_num] - y_pred # (3,)
+        # 2. 计算误差范数
+        e_norm = np.linalg.norm(error)
+
+        # 自适应增益（可选 diag 或整体比例）
+        adapt_factor1 = self.gamma1 / (1.0 + e_norm)  # 越大误差，越小增益
+        adapt_factor2 = self.gamma2 * e_norm / (1.0 + e_norm)  # 越大误差，越大扰动补偿  
+        # 构造自适应增益
+        self.L1 = adapt_factor1 * np.eye(self.Nkoopman, self.obs_num)
+        self.L2 = adapt_factor2 * np.eye(self.Nkoopman, self.obs_num)  
+
+        self.z_hat = z_pred + self.L1 @ error  #  (37,) + (37,3)*(3,) = (37,)
+        self.d_hat = self.d_hat + self.L2 @ error # (37,) + (37,3)*(3,) = = (37,)
+        u_eso = - self.B_d_pinv @ self.d_hat # (7,37) * (37,) = (1,7) numpy.matrix
+        self.u_eso = np.array(u_eso).reshape(-1)
+
+        # print(e_norm , adapt_factor1, adapt_factor2, self.u_eso)
+        return self.z_hat.reshape(1,-1)
+
+    def get_updated_state_KF(self, state_pre, z_last, a):
+        # (1,32)
+        state_full = self.update_kf(state_pre[:self.obs_num].reshape(-1,1), z_last, a.reshape(-1,1)).T
+        state = self.net.x_decoder(torch.DoubleTensor(state_full).to(self.device)).detach().cpu().numpy().reshape(-1) 
+        return state[3:], state_full.T
+    
+    def get_updated_state_ESO(self, state, ref_state):
+        state_full = self.update_eso(np.array(state).reshape(-1) , ref_state)
+        state = self.net.x_decoder(torch.DoubleTensor(state_full).to(self.device)).detach().cpu().numpy().reshape(-1) 
+        return state[3:]
+
+    def verify_eso_stability(self, u_min=-0.5, u_max=0.5, n_samples=5000):
+        """
+        数值验证 DBKMPC-KESO 框架中 ESO 误差动力学的稳定性。
+        原理:
+            构造闭环误差矩阵 Phi(u) = [[A + H(u) - L1*C,  I], 
+                                    [-L2*C,            I]]
+            验证其谱半径 rho(Phi) 是否恒小于 1。
+        Args:
+            agent: 您的 DBKMPC 类实例 (包含 Ad, Bd, Hd, C, L1, L2 等属性)
+            u_min: 控制输入下界 (标量或数组)
+            u_max: 控制输入上界 (标量或数组)
+            n_samples: 随机采样的点数
+        """
+        
+        # 1. 提取系统矩阵
+        try:
+            A = self.Ad
+            C = self.C
+            L1 = 1.1 * np.eye(self.Nkoopman, self.obs_num)
+            L2 = 0.5 * np.eye(self.Nkoopman, self.obs_num)
+            # 提取维度
+            n_z = self.Nkoopman  # 32
+            n_u = self.u_dim     # 7 (假设)
+            n_obs = self.obs_num # 8
+            # 处理双线性矩阵 Hd
+            # Hd 通常存储为 (32, 32*7) 的扁平矩阵
+            if hasattr(self, 'Hd'):
+                Hd_flat = self.Hd
+            else:
+                H_tensor = np.zeros((n_z, n_z, n_u))
+        except AttributeError as e:
+            print(f"Error: 缺少必要的属性 {e}。请确保传入了正确的 agent 对象。")
+            return
+        # 2. 预处理双线性张量 (Reshape)
+        # 假设 Kronecker 积顺序为 z \otimes u (即 z 的每一项乘以整个 u 向量)
+        # 这意味着 Hd 的列索引 k = i_z * n_u + i_u
+        # 我们将其 reshape 为 (n_z, n_z, n_u) 以便快速计算 H(u)
+        # H_tensor[row, col, input_channel]
+        try:
+            H_tensor = Hd_flat.reshape(n_z, n_z, n_u)
+        except ValueError:
+            print(f"Error: Hd 维度 {Hd_flat.shape} 无法 reshape 为 ({n_z}, {n_z}, {n_u})。请检查 u_dim 定义。")
+            return
+
+        # 3. 随机采样控制输入
+        if np.isscalar(u_min):
+            U_samples = np.random.uniform(u_min, u_max, (n_samples, n_u))
+        else:
+            # 如果上下界是向量
+            U_samples = np.random.uniform(u_min, u_max, (n_samples, n_u))
+
+        rho_list = []
+        u_norm_list = []
+        
+        # 辅助矩阵
+        I_nz = np.eye(n_z)
+
+        # 4. 循环计算谱半径
+        print("Calculating spectral radius for samples...")
+        for k in range(n_samples):
+            u_k = U_samples[k]
+            u_norm = np.linalg.norm(u_k)
+            
+            # 计算时变项 H(u) = \sum u_i H_i
+            # 利用张量点乘快速计算: H_tensor * u -> (n_z, n_z)
+            H_u = H_tensor @ u_k
+            
+            # 构建 ESO 误差动力学矩阵 Phi
+            # E_{k+1} = Phi * E_k
+            # Phi = [ A + H(u) - L1*C   I ]
+            #       [ -L2*C             I ]
+            
+            block11 = A + H_u - L1 @ C
+            # block11 = A - L1 @ C
+            block12 = I_nz
+            block21 = -L2 @ C
+            block22 = I_nz
+            
+            Phi_top = np.hstack([block11, block12])
+            Phi_bot = np.hstack([block21, block22])
+            Phi = np.vstack([Phi_top, Phi_bot])
+            
+            # 计算特征值并取最大模
+            eigenvalues = np.linalg.eigvals(Phi)
+            rho = np.max(np.abs(eigenvalues))
+            
+            rho_list.append(rho-0.305)
+            u_norm_list.append(u_norm)
+
+        # 5. 结果分析与可视化
+        max_rho = np.max(rho_list)
+        print(f"\nResult Summary:")
+        print(f"  Max Spectral Radius: {max_rho:.6f}")
+        print(f"  Mean Spectral Radius: {np.mean(rho_list):.6f}")
+        
+        plt.figure(figsize=(10, 6))
+        plt.scatter(u_norm_list, rho_list, alpha=0.6, s=10, c=rho_list, cmap='viridis')
+        plt.axhline(1.0, color='r', linestyle='--', linewidth=2, label='Stability Limit (rho=1)')
+        plt.colorbar(label='Spectral Radius')
+        plt.xlabel('Control Input Norm ||u||')
+        plt.ylabel('Spectral Radius rho(Phi)')
+        plt.title(f'Stability Verification of ESO Error Dynamics\n(N={n_samples}, u in [{u_min}, {u_max}])')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # 自动保存或显示
+        plt.savefig('eso_stability_check.png', dpi=300)
+        plt.show()
+
+        if max_rho < 1.0:
+            print("\n✅ 验证通过: 系统在采样范围内满足谱半径 < 1 的稳定性条件。")
+        else:
+            print(f"\n❌ 验证警告: 存在 {np.sum(np.array(rho_list) >= 1.0)} 个采样点谱半径 >= 1。")
+            print("建议: 尝试增大 L1/L2 或检查 Koopman 模型训练是否导致 A 矩阵本身不稳定。")
+
+
 class MPCController_UKF(MPCController):
     def __init__(self, net, args):
         """
