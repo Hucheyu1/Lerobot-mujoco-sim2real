@@ -4,7 +4,7 @@ import torch
 from tqdm import tqdm
 from models.base_model import KoopmanNet
 from models.init_model import init_model
-from models.losses import k_linear_loss, pred_and_eval_loss_old, koopformer_loss,koopformer_eval_loss_old
+from models.losses import k_linear_loss, pred_and_eval_loss_new, koopformer_loss,koopformer_eval_loss_new
 from args import Args
 import os
 import shutil
@@ -51,12 +51,12 @@ def evaluate(
         for step, batch in enumerate(tqdm(test_loader)):
 
             if type(model).__name__.startswith('Koopformer') or type(model).__name__.startswith('KoopmanLSTM'):
-                pred_and_error = koopformer_eval_loss_old(
+                pred_and_error = koopformer_eval_loss_new(
                     batch_data=batch,
                     net=model,
                 )
             else:
-                pred_and_error = pred_and_eval_loss_old(
+                pred_and_error = pred_and_eval_loss_new(
                     batch_data=batch,
                     net=model,
                 )

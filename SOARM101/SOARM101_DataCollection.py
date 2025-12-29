@@ -189,7 +189,7 @@ class SOARM101DataGenerator:
         train_data_tensor = torch.tensor(self.train_data, dtype=torch.float32)
         train_dataset = TensorDataset(train_data_tensor)
         train_loader = DataLoader(train_dataset, batch_size=self.args.batch_size, \
-                                  collate_fn=self.collate_fn, shuffle=True)
+                                  collate_fn=self.collate_fn, shuffle=True, drop_last=True)
         
         
         val_data_tensor = torch.tensor(self.val_data, dtype=torch.float32)

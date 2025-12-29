@@ -16,11 +16,11 @@ def rank_loss(model, threshold=1.0):
     L2 = torch.sum(torch.relu(threshold - s))
     return L2
 
-def spectral_radius_loss(model):
+def spectral_radius_loss(model,margin=0.95):
     if hasattr(model, "lA"):
         A = model.lA.weight
         eigvals = torch.linalg.eigvals(A)
-        return torch.sum(torch.clamp(torch.abs(eigvals) - 1.0, min=0.0))
+        return torch.sum(torch.clamp(torch.abs(eigvals) - margin, min=0.0))
     else:
         return torch.tensor(0.0)
 # 稀疏正则项损失 
@@ -47,7 +47,7 @@ class BaseLoss(nn.Module):
         elif self.loss_name == "nmse":
             loss = (F.mse_loss(preds, labels)) / (torch.square(labels).mean())
         elif self.loss_name == "weighted_mse":
-            loss = (F.mse_loss(preds[:,:3], labels[:,:3]) + 9 * F.mse_loss(preds[:,3:], labels[:,3:]))/10
+            loss = F.mse_loss(preds[:,:3], labels[:,:3]) + 4 * F.mse_loss(preds[:,3:], labels[:,3:])
             # loss = torch.mean(self.weight * (preds - labels) ** 2)      
         else:
             raise ValueError(f"Loss name {self.loss_name} not implemented!")
@@ -72,7 +72,7 @@ def k_linear_loss(
     x0 = x[:, start_idx , :]    # 输入长度5
 
     base_loss_fn = BaseLoss(loss_name, device)
-    weighted_loss_fn = BaseLoss(loss_name, device)
+    weighted_loss_fn = BaseLoss("weighted_mse", device)
 
     koopman_loss = 0.0
     pred_loss = 0.0
@@ -83,7 +83,8 @@ def k_linear_loss(
     beta = 1.0
     cont = 0.0
 
-    λ_pred = 1.5 if type(net).__name__.startswith('Invert') else 1.0
+    λ_angle = 4
+    λ_pred = 1.0 if type(net).__name__.startswith('Invert') else 1.0
     λ_spec = 1e-3 # 1e-3
     λ_sparse = 1e-9 # 1e-9
     x0_emb = net.x_encoder(x0)
@@ -104,16 +105,17 @@ def k_linear_loss(
         dis_loss += beta * base_loss_fn(x1_pred[:,:3], x1[:,:3])
         angle_loss += beta * base_loss_fn(x1_pred[:,3:], x1[:,3:])
 
-        pred_loss += beta * base_loss_fn(x1_pred, x1)   # 位置与角度单位不一致，角度权重大些 
+        pred_loss += beta * weighted_loss_fn(x1_pred, x1)   # 位置与角度单位不一致，角度权重小些 
 
         cont += beta
         beta *= gamma
         x0_emb = x1_emb_pred
 
     total_loss = koopman_loss + λ_pred * pred_loss + recon_bool * recon_loss 
+    # total_loss = koopman_loss + λ_angle * angle_loss + dis_loss + recon_bool * recon_loss 
     stable_Loss = spectral_radius_loss(net)
     H_Loss = sparsity_loss(net)
-    total_loss = total_loss / cont + λ_spec * stable_Loss + λ_sparse * H_Loss
+    total_loss = total_loss / cont + λ_spec * stable_Loss # + λ_sparse * H_Loss
         
     return dict(
         total_loss = total_loss ,
@@ -121,7 +123,7 @@ def k_linear_loss(
         pred_loss = λ_pred * pred_loss / cont,
         recon_loss = recon_loss / cont,
         dis_loss =  dis_loss / cont,
-        angle_loss = angle_loss / cont,
+        angle_loss = λ_angle * angle_loss / cont,
         stable_Loss = stable_Loss * λ_spec,
         H_Loss = H_Loss * λ_sparse
     )

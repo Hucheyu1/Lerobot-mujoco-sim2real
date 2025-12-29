@@ -19,7 +19,7 @@ class Args:
                                 help="运行模式, 可选值: train / test (默认: train)")
         self.parser.add_argument("--env", type=str, default="SOARM101",
                                 help="环境名称（用于路径生成）(默认: SOARM101)")
-        self.parser.add_argument("--suffix", type=str, default="12_13",
+        self.parser.add_argument("--suffix", type=str, default="12_23",
                                 help="实验后缀（用于路径区分）")
         self.parser.add_argument("--seed", type=int, default=42,
                                 help="随机种子 (默认: 42)")
@@ -55,9 +55,9 @@ class Args:
                                 help="学习率 (默认: 1e-3)")
         self.parser.add_argument("--num_epochs", type=int, default=500,
                                 help="训练轮数 (默认: 300)")
-        self.parser.add_argument("--batch_size", type=int, default=128,
+        self.parser.add_argument("--batch_size", type=int, default=256,
                                 help="训练批次大小 (默认: 128)")
-        self.parser.add_argument("--eval_batch_size", type=int, default=128,
+        self.parser.add_argument("--eval_batch_size", type=int, default=256,
                                 help="评估批次大小 (默认: 128)")
         self.parser.add_argument("--log_interval", type=int, default=100,
                                 help="日志打印间隔（单位：迭代次数）(默认: 100)")

@@ -22,7 +22,7 @@ def main():
             start_id = args.seq_len # 序列长度
         else:
             start_id = 1
-        for col, input_type in enumerate(["random", "chirp"]):
+        for col, input_type in enumerate(["random", "sin"]):
             save_path = output_dir + f"/test_{input_type}"
             horizen = 151
             all_preds = np.load(save_path + "/all_preds.npy")
@@ -36,18 +36,19 @@ def main():
             _, steps, _ = all_preds.shape
             steps = np.arange(0, steps)
             # ==== 长期预测：前150步 ====
-            axes[0,col].plot(steps[0:horizen], np.log10(mse_per_timestep[start_id:start_id+horizen]), color=Color[i] ,label=Methods_name[i], linewidth=1.5)
+            axes[0,col].plot(steps[0:horizen], np.log10(dis_per_timestep[start_id:start_id+horizen]), color=Color[i] ,label=Methods_name[i], linewidth=1.5)
             # axes[0,col].legend()
-            axes[0,col].set_xlabel('Steps',fontsize=12)
-            axes[0,col].set_ylabel('log10(Error)',fontsize=12)
+            axes[0,col].set_xlabel('Steps',fontsize=16)
+            axes[0,col].set_ylabel('log10(Error)',fontsize=16)
+            axes[0,col].tick_params(axis='both', which='major', labelsize=16)
             if input_type == "random":
-                axes[0,col].set_title('Random Input',fontsize=14)
+                axes[0,col].set_title('Random Input',fontsize=16)
             if input_type == "sin":
-                axes[0,col].set_title('Sinusoidal Periodic Input',fontsize=14)
+                axes[0,col].set_title('Sinusoidal Periodic Input',fontsize=16)
             if input_type == "chirp":
-                axes[0,col].set_title('Chirp Input',fontsize=14)
+                axes[0,col].set_title('Chirp Input',fontsize=16)
 
-            if method == 'IBKN':
+            if method == 'DBKN':
                 # ==== 预测结果 ====
                 idx = random.randint(0 , len(steps))
                 axes[1,col].plot(steps, all_preds[idx, :, 0], color='blue', linestyle='-.', label='Predicted x')
@@ -57,22 +58,24 @@ def main():
                 axes[1,col].plot(steps, all_labels_x[idx, :, 1], color='yellow', label='True y')
                 axes[1,col].plot(steps, all_labels_x[idx, :, 2], color='pink', label='True z')
                 # axes[1,col].legend()
-                axes[1,col].set_xlabel('Steps',fontsize=12)
-                axes[1,col].set_ylabel('position(m)',fontsize=12)
+                axes[1,col].set_xlabel('Steps',fontsize=16)
+                axes[1,col].set_ylabel('position(m)',fontsize=16)
+                axes[1,col].tick_params(axis='both', which='major', labelsize=16)
                 # ==== 输入结果 ====
                 for j in range(5):
                     axes[2,col].plot(steps, all_labels_u[idx, :, j], color=Color[j],label=f'ω{j+1}')
                 # axes[2,col].legend()
-                axes[2,col].set_xlabel('Steps',fontsize=12)
-                axes[2,col].set_ylabel('input(rad/s)',fontsize=12)
-                
+                axes[2,col].set_xlabel('Steps',fontsize=16)
+                axes[2,col].set_ylabel('input(rad/s)',fontsize=16)
+                axes[2,col].tick_params(axis='both', which='major', labelsize=16)
     # ====== 每行统一图例放在右侧 ======
     for row in range(3):
         handles, labels = axes[row, 0].get_legend_handles_labels()
         axes[row, -1].legend(handles, labels,
                             loc="center left",
                             bbox_to_anchor=(1.05, 0.5),
-                            borderaxespad=0)
+                            borderaxespad=0,
+                            fontsize=16)
     plt.tight_layout()
     fig.savefig("./results/" + args.env + "/" + args.suffix + f'/plot.png', dpi=300)
     plt.show()
