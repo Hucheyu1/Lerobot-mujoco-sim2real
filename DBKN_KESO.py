@@ -382,7 +382,7 @@ if __name__ == "__main__":
     load_model_path = args.output_dir + "/best_model.pt"
     model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
     MPC_Controller = MPCController_KESO(model, args)
-    # MPC_Controller.verify_eso_stability()
+    MPC_Controller.verify_eso_stability()
 
     try:
         # 实例化播放器

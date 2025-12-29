@@ -350,13 +350,17 @@ class MPCController_KESO(MPCController):
         plt.figure(figsize=(10, 6))
         plt.scatter(u_norm_list, rho_list, alpha=0.6, s=10, c=rho_list, cmap='viridis')
         plt.axhline(1.0, color='r', linestyle='--', linewidth=2, label='Stability Limit (rho=1)')
-        plt.colorbar(label='Spectral Radius')
-        plt.xlabel('Control Input Norm ||u||')
-        plt.ylabel('Spectral Radius rho(Phi)')
-        plt.title(f'Stability Verification of ESO Error Dynamics\n(N={n_samples}, u in [{u_min}, {u_max}])')
-        plt.legend()
+        cbar = plt.colorbar()
+        # 设置侧边标签的字体大小
+        # cbar.set_label('Spectral Radius', fontsize=14)
+        # (可选) 设置侧边刻度数字(0.97, 0.98...)的字体大小
+        cbar.ax.tick_params(labelsize=14)
+        plt.xlabel('Control Input Norm ||u||',fontsize=16)
+        plt.ylabel('Spectral Radius rho(Phi)',fontsize=16)
+        plt.title(f'Stability Verification of ESO Error Dynamics\n(N={n_samples}, u in [{u_min}, {u_max}])',fontsize=16)
+        plt.legend(fontsize=16)
         plt.grid(True, alpha=0.3)
-        
+        plt.tick_params(axis='both', which='major', labelsize=16)
         # 自动保存或显示
         plt.savefig('eso_stability_check.png', dpi=300)
         plt.show()
