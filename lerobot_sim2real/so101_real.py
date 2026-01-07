@@ -17,6 +17,7 @@ ZMQ_IP = "127.0.0.1"
 ZMQ_PORT = "5555"
 REAL_ROBOT_PORT = "COM24"
 
+
 def main():
     # ==================== 阶段 1 & 2 (几乎不变) ====================
     print("1. 配置机器人...")
@@ -52,7 +53,7 @@ def main():
             if socket in socks and socks[socket] == zmq.POLLIN:
                 # c. 只有在确定有消息时才接收，这个调用不会阻塞
                 data_string = socket.recv_string().strip()
-                
+
                 # --- 后续逻辑与原来完全相同，但现在被包裹在if块内 ---
                 if not data_string:
                     continue
@@ -60,13 +61,13 @@ def main():
                 joint_pos_deg_list = json.loads(data_string)
 
                 if len(joint_pos_deg_list) != len(JOINT_NAMES):
-                    print(f"警告：收到的数据长度 ({len(joint_pos_deg_list)}) 与期望的关节数量 ({len(JOINT_NAMES)}) 不匹配。")
+                    print(
+                        f"警告：收到的数据长度 ({len(joint_pos_deg_list)}) 与期望的关节数量 ({len(JOINT_NAMES)}) 不匹配。"
+                    )
                     continue
-                    
-                action_to_send = {
-                    f"{name}.pos": angle for name, angle in zip(JOINT_NAMES, joint_pos_deg_list)
-                }
-                
+
+                action_to_send = {f"{name}.pos": angle for name, angle in zip(JOINT_NAMES, joint_pos_deg_list)}
+
                 robot.send_action(action_to_send)
                 # print(f"已发送动作: {action_to_send}")
 
@@ -80,19 +81,20 @@ def main():
     finally:
         # ==================== 阶段 5: 安全清理资源 (不变) ====================
         print("正在安全关闭...")
-        
+
         # a. 关闭 ZMQ
         if not socket.closed:
             socket.close()
         if not context.closed:
             context.term()
         print("   ZMQ 已关闭。")
-        
+
         # b. 断开机器人连接
         if robot and robot.is_connected:
             print("   断开机器人连接...")
             robot.disconnect()
             print("   机器人已安全断开。")
+
 
 if __name__ == "__main__":
     main()

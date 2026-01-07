@@ -1,35 +1,39 @@
-import os
+import math
+import time
+
 # os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 import mujoco
 import numpy as np
-from utility.ZMQ import ZMQCommunicator
-from control.TrajectoryGenerator import CartesianTrajectoryGenerator,CartesianTrajectoryGenerator_pinocchio
-from control.MPC_Controler import MPCController_UKF
-from control.config import Config
-import time
-import math
-from args import Args
 import torch
-from SOARM101.SOARM101_Env import SOARM101Env
 
+from args import Args
+from control.config import Config
+from control.MPC_Controler import MPCController_UKF
+from control.TrajectoryGenerator import CartesianTrajectoryGenerator, CartesianTrajectoryGenerator_pinocchio
 from models.init_model import init_model
+from SOARM101.SOARM101_Env import SOARM101Env
+from utility.ZMQ import ZMQCommunicator
+
 # --- 修改后的主仿真类 ---
 joint_offsets = [
-    0,    # - (Motor 1 position: +1.49)
-    0,    # - (Motor 2 position: +7.54)
-    0,     # - (Motor 3 position: +0.7)
-    0,    # - (Motor 4 position: -41.31)
-    0,      # - (Motor 5 position: -0.7)
-    -41.97     # - (Motor 6 position: +4.48) 
+    0,  # - (Motor 1 position: +1.49)
+    0,  # - (Motor 2 position: +7.54)
+    0,  # - (Motor 3 position: +0.7)
+    0,  # - (Motor 4 position: -41.31)
+    0,  # - (Motor 5 position: -0.7)
+    -41.97,  # - (Motor 6 position: +4.48)
 ]
+
 
 def sim_to_real(q_sim_deg, offsets):
     """MuJoCo 角度 (度) -> 真实机器人指令角度 (度)"""
     return [sim - off for sim, off in zip(q_sim_deg, offsets)]
 
+
 class Test:
-    def __init__(self, path, Controller, communicator, cartesian_points, 
-                 joint_angle_traj, num_joints, draw_num, config):
+    def __init__(
+        self, path, Controller, communicator, cartesian_points, joint_angle_traj, num_joints, draw_num, config
+    ):
         """
         初始化参数
         :param path: XML 模型路径
@@ -38,7 +42,7 @@ class Test:
         :param joint_angle_traj: 关节空间轨迹 (N, num_joints)
         :param num_joints: 机器人的关节数量 (例如 5, 6, 7)
         """
-        
+
         self.path = path
         self.communicator = communicator
         self.config = config
@@ -49,15 +53,15 @@ class Test:
         # 保存轨迹数据
         self.actual_traj = []
         self.u_list = []
-        self.cartesian_points = cartesian_points # (N, 3)
-        self.joint_angle_traj = joint_angle_traj # (N, 5)
+        self.cartesian_points = cartesian_points  # (N, 3)
+        self.joint_angle_traj = joint_angle_traj  # (N, 5)
         self.state_all_ref = np.hstack([cartesian_points, joint_angle_traj])
         self.num_joints = num_joints
-        
+
         # 轨迹播放进度计数器
         self.traj_index = Controller.startid
         self.total_frames = len(joint_angle_traj)
-        
+
         # 预计算采样步长 (防止点太多卡顿)
         # 保证屏幕上最多显示 300-500 个红点
         self.draw_step = max(1, len(cartesian_points) // draw_num)
@@ -67,7 +71,7 @@ class Test:
         try:
             # 1. 获取名为 "home" 的关键帧 ID
             key_id = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_KEY, "home")
-            
+
             # 2. 如果 ID 有效 (>=0)，则读取对应的 qpos 数据
             if key_id >= 0:
                 # model.key_qpos 是一个 (nkey, nq) 的数组
@@ -80,8 +84,8 @@ class Test:
             print(f"读取 Keyframe 出错: {e}")
 
         # --- 2. 回归轨迹相关的变量 ---
-        self.return_traj = None     # 存储生成的回归路径
-        self.return_index = 0       # 回归播放进度
+        self.return_traj = None  # 存储生成的回归路径
+        self.return_index = 0  # 回归播放进度
         self.return_duration = 2.0  # 回归过程耗时 2秒
 
     def runBefore(self):
@@ -91,29 +95,29 @@ class Test:
         # 将机器人复位到轨迹的起始位置
         print(self.traj_index)
         if self.total_frames > 0:
-            self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[self.traj_index]
+            self.env.data.qpos[: self.num_joints] = self.joint_angle_traj[self.traj_index]
             mujoco.mj_forward(self.env.model, self.env.data)
             if self.traj_index == 0:
                 self.state0 = self.state_all_ref[0]
             else:
-                self.state0 = self.state_all_ref[:self.traj_index+1]
-            self.state_tensor = torch.DoubleTensor(self.state0).unsqueeze(0) 
-            
+                self.state0 = self.state_all_ref[: self.traj_index + 1]
+            self.state_tensor = torch.DoubleTensor(self.state0).unsqueeze(0)
+
         print("仿真即将开始...")
         # --- 1. 绘制静态轨迹 (红色小球) ---
         # 注意：必须每帧都画，因为 viewer.sync() 会清空 user_scn
-        for pt in self.cartesian_points[::self.draw_step]:
+        for pt in self.cartesian_points[:: self.draw_step]:
             # 安全检查：如果 geometry 满了就不画了
             if self.env.viewer.user_scn.ngeom >= self.env.viewer.user_scn.maxgeom:
                 break
-            
+
             mujoco.mjv_initGeom(
                 self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                 type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.002, 0, 0],       # 2mm 红球
+                size=[0.002, 0, 0],  # 2mm 红球
                 pos=pt,
                 mat=np.eye(3).flatten(),
-                rgba=[1, 0, 0, 0.3]       # 半透明红
+                rgba=[1, 0, 0, 0.3],  # 半透明红
             )
             self.env.viewer.user_scn.ngeom += 1
 
@@ -135,70 +139,76 @@ class Test:
             mujoco.mj_forward(self.env.model, self.env.data)
             # 绘制当前目标点 (绿色大球)
             # current_pos = self.cartesian_points[self.traj_index]
-            current_pos = self.actual_traj[self.traj_index-self.mpc_controller.startid][:3]
+            current_pos = self.actual_traj[self.traj_index - self.mpc_controller.startid][:3]
             if self.env.viewer.user_scn.ngeom <= self.env.viewer.user_scn.maxgeom:
                 mujoco.mjv_initGeom(
                     self.env.viewer.user_scn.geoms[self.env.viewer.user_scn.ngeom],
                     type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=[0.002, 0, 0],    # 1cm 绿球
+                    size=[0.002, 0, 0],  # 1cm 绿球
                     pos=current_pos,
                     mat=np.eye(3).flatten(),
-                    rgba=[0, 1, 0, 1]     # 不透明绿
+                    rgba=[0, 1, 0, 1],  # 不透明绿
                 )
                 self.env.viewer.user_scn.ngeom += 1
-            
+
             # 进度 +1
             self.traj_index += 1
-            
+
             # 如果觉得播放太快，可以在这里加一点点延时，但通常不建议在 GUI 线程 sleep 太久
-            # time.sleep(0.002) 
-        
-        
+            # time.sleep(0.002)
+
         # --- 阶段 2: 主轨迹刚结束，生成回归路径 (只执行一次) ---
         elif self.return_traj is None and self.home_qpos is not None:
-            self.config.save_result(np.array(self.u_list), np.array(self.actual_traj), 
-                                    self.cartesian_points[self.mpc_controller.startid+1:self.mpc_controller.startid+1+len(self.actual_traj)],
-                                    self.joint_angle_traj[self.mpc_controller.startid+1:self.mpc_controller.startid+1+len(self.actual_traj)])
+            self.config.save_result(
+                np.array(self.u_list),
+                np.array(self.actual_traj),
+                self.cartesian_points[
+                    self.mpc_controller.startid + 1 : self.mpc_controller.startid + 1 + len(self.actual_traj)
+                ],
+                self.joint_angle_traj[
+                    self.mpc_controller.startid + 1 : self.mpc_controller.startid + 1 + len(self.actual_traj)
+                ],
+            )
             print("主轨迹播放完毕，生成回归 Home 的路径...")
             print(len(self.actual_traj))
-            time.sleep(0.5) 
-            start_qpos = self.joint_angle_traj[-1]       # 当前位置
-            end_qpos = self.home_qpos[:self.num_joints]  # 目标位置
-            
+            time.sleep(0.5)
+            start_qpos = self.joint_angle_traj[-1]  # 当前位置
+            end_qpos = self.home_qpos[: self.num_joints]  # 目标位置
+
             # 计算需要多少帧 (假设 timestep=0.002, 持续 2秒 => 1000帧)
             steps = int(self.return_duration / 0.1)
-            
+
             # 生成插值轨迹 (Shape: [steps, num_joints])
             # 使用 linspace 生成平滑过渡
             # 如果想要非线性平滑(ease-in-out)，可以使用 cos 函数处理 steps
             self.return_traj = np.linspace(start_qpos, end_qpos, steps)
-            
-            self.return_index = 0 # 准备开始播放回归
+
+            self.return_index = 0  # 准备开始播放回归
 
         # --- 阶段 3: 播放回归轨迹 ---
         elif self.return_traj is not None and self.return_index < len(self.return_traj):
             print("回归 Home...")
             # 设置回归过程中的关节角度
-            self.env.data.qpos[:self.num_joints] = self.return_traj[self.return_index]
+            self.env.data.qpos[: self.num_joints] = self.return_traj[self.return_index]
             mujoco.mj_forward(self.env.model, self.env.data)
             # 这里不再绘制绿球，因为已经在“回家”路上了
             self.return_index += 1
-            s_next , _, _, _, _ = self.env.step(self.home_ctrl) # (8,)
+            s_next, _, _, _, _ = self.env.step(self.home_ctrl)  # (8,)
         # --- 阶段 4: 全部结束，保持 Home 姿态 ---
         else:
             if self.home_qpos is not None:
-                self.env.data.qpos[:self.num_joints] = self.home_qpos[:self.num_joints]
+                self.env.data.qpos[: self.num_joints] = self.home_qpos[: self.num_joints]
             else:
                 # 如果没有 home，就停在轨迹终点
-                self.env.data.qpos[:self.num_joints] = self.joint_angle_traj[-1]
-                
+                self.env.data.qpos[: self.num_joints] = self.joint_angle_traj[-1]
+
             mujoco.mj_forward(self.env.model, self.env.data)
-            s_next , _, _, _, _ = self.env.step(self.home_ctrl) # (8,)
+            s_next, _, _, _, _ = self.env.step(self.home_ctrl)  # (8,)
 
         # --- 3. 通信器逻辑 (保留你的原始逻辑) ---
-        sim_joint_rad = self.env.data.qpos[:6].copy() 
+        sim_joint_rad = self.env.data.qpos[:6].copy()
         # 将弧度转换为角度
-        sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]        
+        sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]
         q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
         self.communicator.send_data(q_real_target_deg)
 
@@ -206,58 +216,60 @@ class Test:
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
         # time.sleep(0.01)  # 控制发送频
-    
+
     def runMPC(self):
         # --- 2. MPC 控制计算 ---
         ref_traj_segment = self.state_all_ref[self.traj_index + 1 : self.traj_index + self.H + 1]
         if self.mpc_controller.state_full:
             lifted_ref = np.zeros((self.H, self.mpc_controller.Nkoopman))
             for i in range(len(ref_traj_segment)):
-                lifted_ref[i] = self.mpc_controller.Psi_o(torch.DoubleTensor(ref_traj_segment[i]).unsqueeze(0)).flatten() 
+                lifted_ref[i] = self.mpc_controller.Psi_o(
+                    torch.DoubleTensor(ref_traj_segment[i]).unsqueeze(0)
+                ).flatten()
             ref_flat = lifted_ref.flatten().reshape(-1, 1)
-        else:  
+        else:
             ref_flat = ref_traj_segment.flatten().reshape(-1, 1)
 
-        z0 = self.mpc_controller.Psi_o(self.state_tensor) # (32,1)
+        z0 = self.mpc_controller.Psi_o(self.state_tensor)  # (32,1)
         z_last = z0
-        if self.mpc_controller.args.MPC_type == 'mpc':
+        if self.mpc_controller.args.MPC_type == "mpc":
             p = np.vstack([ref_flat, z0.reshape(-1, 1)])
-        if self.mpc_controller.args.MPC_type == 'delta_mpc':
+        if self.mpc_controller.args.MPC_type == "delta_mpc":
             p = np.vstack([ref_flat, z0.reshape(-1, 1), self.mpc_controller.u_prev.reshape(-1, 1)])
 
         # b. 计算控制输入
         u, a = self.mpc_controller.get_control(p)
-        self.mpc_controller.u_prev = u # 保存当前控制以备下次使用
+        self.mpc_controller.u_prev = u  # 保存当前控制以备下次使用
 
         # --- 3. 应用控制并步进仿真 ---
-        s_next= self.runstep(a, z_last) # (8,)
+        s_next = self.runstep(a, z_last)  # (8,)
         self.actual_traj.append(s_next)
         self.u_list.append(u)
         # 处理时间序列
         if self.mpc_controller.startid > 0:
-            self.state0 = np.concatenate((self.state0[1:,:],s_next.reshape(1,-1)),axis=0) # (5, 8)
+            self.state0 = np.concatenate((self.state0[1:, :], s_next.reshape(1, -1)), axis=0)  # (5, 8)
             s_next = self.state0.copy()
 
-        self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0) # (1,8) / (1, 5, 8)
+        self.state_tensor = torch.DoubleTensor(s_next).unsqueeze(0)  # (1,8) / (1, 5, 8)
 
-    def runstep(self,action,z_last):
+    def runstep(self, action, z_last):
         # config.use_nosie
-        target_velocity = action[:self.env.udim]
-        self.env.data.ctrl[:self.env.udim] = target_velocity
+        target_velocity = action[: self.env.udim]
+        self.env.data.ctrl[: self.env.udim] = target_velocity
         # 执行物理模拟
         for _ in range(self.env.frame_skip):
             mujoco.mj_step(self.env.model, self.env.data)
 
         if self.config.use_nosie:
             # 定义扰动的最大强度（例如：±0.01 弧度）
-            angle_disturbance_magnitude = 0.01  
+            angle_disturbance_magnitude = 0.01
             # 选项 A: 扰动关节位置 (qpos)
             # qpos 尺寸为 (nq,)，即广义坐标位置维度
             # 生成一个随机扰动角度 (均匀分布在 [-magnitude, +magnitude])
             angle_disturb = np.random.uniform(
                 low=-angle_disturbance_magnitude,
                 high=angle_disturbance_magnitude,
-                size=self.env.udim  # 扰动作用于所有关节位置
+                size=self.env.udim,  # 扰动作用于所有关节位置
             )
             # 将扰动加到当前的关节角度上
             self.env.data.qpos[self.env.joint_ids] += angle_disturb
@@ -265,7 +277,9 @@ class Test:
             # 否则 MuJoCo 的状态（如速度、雅可比矩阵等）将不一致。
             mujoco.mj_forward(self.env.model, self.env.data)
         if self.config.use_KEM:
-            self.env.data.qpos[self.env.joint_ids] = self.mpc_controller.get_updated_state(self.env._get_state(), z_last, action)
+            self.env.data.qpos[self.env.joint_ids] = self.mpc_controller.get_updated_state(
+                self.env._get_state(), z_last, action
+            )
             mujoco.mj_forward(self.env.model, self.env.data)
 
         # 4. 获取模拟后的新状态
@@ -277,11 +291,12 @@ class Test:
 
     def is_running(self):
         return self.env.viewer.is_running()
-    
+
     def run_loop(self):
         self.runBefore()
         while self.is_running():
             self.runFunc()
+
 
 if __name__ == "__main__":
     # --- 0. 基本配置 ---
@@ -289,39 +304,39 @@ if __name__ == "__main__":
     args = Args()
     args.device = "cpu"
     MODEL_XML_PATH = args.xml_path
-    EE_SITE_NAME = 'gripperframe' # 你的XML里定义的夹爪中心的 <site>
-    NUM_JOINTS = args.u_dim # 你的机器人关节数量
+    EE_SITE_NAME = "gripperframe"  # 你的XML里定义的夹爪中心的 <site>
+    NUM_JOINTS = args.u_dim  # 你的机器人关节数量
     use_pinocchio = False
 
-    config_dict={
-        'suffix' : args.suffix,
-        'env_name': args.env,
-        'method' : args.model,
-        'use_KEM' : True,
-        'use_nosie': True,
-        'traj_name' : 'FigStar',  # 使用Fig8\FigStar轨迹进行测试
-        'use_eso': None,
-        'use_payload': None
+    config_dict = {
+        "suffix": args.suffix,
+        "env_name": args.env,
+        "method": args.model,
+        "use_KEM": True,
+        "use_nosie": True,
+        "traj_name": "FigStar",  # 使用Fig8\FigStar轨迹进行测试
+        "use_eso": None,
+        "use_payload": None,
     }
-    config = Config( **config_dict)
-    
+    config = Config(**config_dict)
+
     if not use_pinocchio:
         # 创建生成器实例
         traj_generator = CartesianTrajectoryGenerator(
             model_path=MODEL_XML_PATH,
             ee_site_name=EE_SITE_NAME,
             num_joints=NUM_JOINTS,
-            idx=1, 
-            time_horizon = 60, 
-            time_steps_per_sec = 10
+            idx=1,
+            time_horizon=60,
+            time_steps_per_sec=10,
         )
         # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
-        target_quat = None # 绕X轴旋转90度
-        # target_quat = np.array([0, 0, 1, 0]) 
+        target_quat = None  # 绕X轴旋转90度
+        # target_quat = np.array([0, 0, 1, 0])
         # 调用generate方法，反解出关节角度
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name = config_dict['traj_name'],  # Circle, Fig8
-            target_orientation=target_quat
+            traj_name=config_dict["traj_name"],  # Circle, Fig8
+            target_orientation=target_quat,
         )
     else:
         ARM_XML_PATH = args.arm_xml_path
@@ -329,9 +344,9 @@ if __name__ == "__main__":
             arm_model_path=ARM_XML_PATH,
             ee_site_name=EE_SITE_NAME,
             num_joints=NUM_JOINTS,
-            idx = 0,
+            idx=0,
             time_horizon=60,
-            time_steps_per_sec=5
+            time_steps_per_sec=5,
         )
         # 角度（度）
         angle_degrees = 90  # 0  90
@@ -341,35 +356,31 @@ if __name__ == "__main__":
         c = math.cos(angle_radians)
         s = math.sin(angle_radians)
         # 构建绕 X 轴旋转的矩阵
-        target_orientation = np.array([
-            [1, 0, 0],
-            [0, c, -s],
-            [0, s, c]
-        ])
+        target_orientation = np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
         # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name = config_dict['traj_name'],  # Circle, Fig8
-            target_orientation_matrix=target_orientation
+            traj_name=config_dict["traj_name"],  # Circle, Fig8
+            target_orientation_matrix=target_orientation,
         )
-    
+
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")
     model = init_model(args)
     model.double()
     load_model_path = args.output_dir + "/best_model.pt"
-    model.load_state_dict(torch.load(load_model_path, map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(load_model_path, map_location=torch.device("cpu")))
     MPC_Controller = MPCController_UKF(model, args)
 
     try:
         # 实例化播放器
         test = Test(
             path=MODEL_XML_PATH,
-            Controller = MPC_Controller,
-            communicator = zmq_communicator, # 传入你的通信器
+            Controller=MPC_Controller,
+            communicator=zmq_communicator,  # 传入你的通信器
             cartesian_points=cartesian_points,
             joint_angle_traj=joint_angle_traj,
-            num_joints = NUM_JOINTS,
-            draw_num = 300,
-            config = config
+            num_joints=NUM_JOINTS,
+            draw_num=300,
+            config=config,
         )
         # 启动
         test.run_loop()
@@ -379,4 +390,3 @@ if __name__ == "__main__":
     finally:
         # 清理通信资源
         zmq_communicator.cleanup()
-

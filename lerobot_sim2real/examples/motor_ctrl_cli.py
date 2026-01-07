@@ -2,6 +2,7 @@ import argparse
 import logging
 from typing import Dict
 import sys
+
 # 导入我们之前设计的增强版机器人控制器
 from joint_mode import ControllableSO101Robot
 from lerobot.robots.so101_follower import SO101FollowerConfig
@@ -9,10 +10,8 @@ from lerobot.robots.so101_follower import SO101FollowerConfig
 # ==================== 配置 ====================
 # 硬件和关节映射
 REAL_ROBOT_PORT = "COM24"  # !!! 修改为你的串口 !!!
-JOINT_NAMES = [
-    "shoulder_pan", "shoulder_lift", "elbow_flex",
-    "wrist_flex", "wrist_roll", "gripper"
-]
+JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]
+
 
 # ==================== 辅助函数 ====================
 def get_joint_name_from_id(joint_id: int) -> str:
@@ -21,13 +20,20 @@ def get_joint_name_from_id(joint_id: int) -> str:
         raise ValueError(f"关节ID必须在1到{len(JOINT_NAMES)}之间")
     return JOINT_NAMES[joint_id - 1]
 
+
 def print_joint_diagnostics(robot: ControllableSO101Robot, joint_name: str):
     """打印指定关节的详细诊断信息"""
     print(f"--- 正在获取关节 '{joint_name}' 的诊断信息 ---")
     registers_to_read = [
-        "Present_Position", "Present_Speed", "Present_Load",
-        "Goal_Position", "Goal_Speed", "Torque_Limit",
-        "P_Gain", "I_Gain", "D_Gain",
+        "Present_Position",
+        "Present_Speed",
+        "Present_Load",
+        "Goal_Position",
+        "Goal_Speed",
+        "Torque_Limit",
+        "P_Gain",
+        "I_Gain",
+        "D_Gain",
         "Hardware_Error_Status",
     ]
     # 使用底层bus对象的 read 方法一次性读取多个寄存器
@@ -38,12 +44,13 @@ def print_joint_diagnostics(robot: ControllableSO101Robot, joint_name: str):
     except Exception as e:
         print(f"读取诊断信息失败: {e}")
 
+
 # ==================== 主程序 ====================
 def main():
     # --- 1. 设置命令行解析器 (argparse) ---
     parser = argparse.ArgumentParser(
         description="一个基于 lerobot 框架的机械臂控制和调试命令行工具。",
-        formatter_class=argparse.RawTextHelpFormatter  # 保持帮助信息格式
+        formatter_class=argparse.RawTextHelpFormatter,  # 保持帮助信息格式
     )
     subparsers = parser.add_subparsers(dest="operation", help="可执行的操作")
 
@@ -64,7 +71,7 @@ def main():
     # get-diagnostics (替代 get_config)
     p_getdiag = subparsers.add_parser("get-diagnostics", help="获取单个关节的详细诊断信息")
     p_getdiag.add_argument("joint_id", type=int, help="关节ID (1-6)")
-    
+
     # set-pid (低级调试)
     p_setpid = subparsers.add_parser("set-pid", help="设置单个关节的PID参数 (低级)")
     p_setpid.add_argument("joint_id", type=int, help="关节ID (1-6)")
@@ -73,7 +80,7 @@ def main():
     p_setpid.add_argument("d", type=int, help="D Gain")
 
     # ... 你可以按照这个模式添加更多命令，如 get-speed, set-raw-pos 等 ...
-    
+
     # 解析命令行参数
     args = parser.parse_args()
 
@@ -85,7 +92,7 @@ def main():
     logging.basicConfig(level=logging.WARNING)
     robot_config = SO101FollowerConfig(port=REAL_ROBOT_PORT, use_degrees=True)
     robot = ControllableSO101Robot(config=robot_config)
-    
+
     try:
         print("--- 正在连接机器人 ---")
         robot.connect()
@@ -110,7 +117,7 @@ def main():
         elif args.operation == "get-diagnostics":
             joint_name = get_joint_name_from_id(args.joint_id)
             print_joint_diagnostics(robot, joint_name)
-            
+
         elif args.operation == "set-pid":
             joint_name = get_joint_name_from_id(args.joint_id)
             print(f"设置关节 '{joint_name}' 的PID为 P={args.p}, I={args.i}, D={args.d}")
@@ -129,9 +136,10 @@ def main():
             robot.disconnect()
             print("--- 连接已断开 ---")
 
+
 if __name__ == "__main__":
     # 假设你已经将之前的 ControllableSO101Robot 类保存在了
     # `your_project/controllable_robot.py` 文件中
-    
+
     # sys.path.insert(0, ".") # 将当前目录添加到path，以便导入
     main()

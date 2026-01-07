@@ -6,13 +6,14 @@ from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
 
 # ==================== 1. 定义增强的机器人控制类 ====================
 
+
 class ControllableSO101Robot(SO101Follower):
     """
     一个扩展了 SO101Follower 的机器人控制类。
     它提供了一个统一的方法来控制电机的三种扭矩模式：
     'on', 'off', 'damping'。
     """
-    
+
     def set_damping_mode(self):
         """
         [内部方法] 使用同步写入将所有电机设置为阻尼模式 (Torque Enable = 2)。
@@ -29,7 +30,7 @@ class ControllableSO101Robot(SO101Follower):
             mode (str): 目标模式。可选项: 'on', 'off', 'damping'。
         """
         print(f"--- 正在设置扭矩模式为: '{mode}' ---")
-        
+
         if mode == "on":
             # 调用父类已有的 enable_torque 方法 (对应模式 1)
             self.enable_torque()
@@ -42,17 +43,18 @@ class ControllableSO101Robot(SO101Follower):
         else:
             # 错误处理，防止输入无效模式
             raise ValueError(f"无效的扭矩模式 '{mode}'。有效选项为: 'on', 'off', 'damping'。")
-        
+
         print("设置完成！")
 
 
 # ==================== 2. 编写交互式演示脚本 ====================
 
+
 def main():
     # 配置
     REAL_ROBOT_PORT = "COM24"  # !!! 修改为你的串口 !!!
     logging.basicConfig(level=logging.WARNING)
-    
+
     # 实例化我们新的、增强的机器人对象
     robot_config = SO101FollowerConfig(port=REAL_ROBOT_PORT, id="so101_follower", use_degrees=True)
     robot = ControllableSO101Robot(config=robot_config)
@@ -62,7 +64,7 @@ def main():
         robot.connect()
         print("机器人已连接。默认模式为 'on' (扭矩开启)。")
         input("请尝试轻轻推动机械臂，感受其锁定状态。按 Enter 继续...")
-        
+
         # --- 演示 1: 切换到阻尼模式 ---
         robot.set_torque_mode("damping")
         print("现在你可以手动移动机械臂进行示教。")
@@ -89,6 +91,7 @@ def main():
             # robot.disconnect() 会自动将扭矩设置为 'on'
             robot.disconnect()
             print("机器人已安全断开。")
+
 
 if __name__ == "__main__":
     main()

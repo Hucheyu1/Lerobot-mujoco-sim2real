@@ -8,5 +8,5 @@ def dump_json(data, path):
 
 def load_json(path):
     """Load a JSON object from a file"""
-    with open(path, "r", encoding="utf8") as f:
+    with open(path, encoding="utf8") as f:
         return json.load(f)

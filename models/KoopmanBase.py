@@ -1,43 +1,47 @@
-import torch
-import numpy as np
-import torch.nn as nn
 from collections import OrderedDict
+
+import numpy as np
+import torch
+import torch.nn as nn
+
 from .base_model import StableKoopmanOperator
 
-def gaussian_init_(n_units, std=1):    
-    sampler = torch.distributions.Normal(torch.Tensor([0]), torch.Tensor([std/n_units]))
-    Omega = sampler.sample((n_units, n_units))[..., 0]  
+
+def gaussian_init_(n_units, std=1):
+    sampler = torch.distributions.Normal(torch.Tensor([0]), torch.Tensor([std / n_units]))
+    Omega = sampler.sample((n_units, n_units))[..., 0]
     return Omega
+
 
 class Koopmanlinear(StableKoopmanOperator):
     def __init__(self, x_dim, u_dim, encode_layers, use_stable=False, use_decoder=False):
-
         super().__init__(x_dim, u_dim, encode_layers, use_stable, use_decoder)
         Layers = OrderedDict()
-        for layer_i in range(len(encode_layers)-1):
-            Layers["linear_{}".format(layer_i)] = nn.Linear(encode_layers[layer_i],encode_layers[layer_i+1])
-            if layer_i != len(encode_layers)-2:
-                Layers["relu_{}".format(layer_i)] = nn.ReLU()
+        for layer_i in range(len(encode_layers) - 1):
+            Layers[f"linear_{layer_i}"] = nn.Linear(encode_layers[layer_i], encode_layers[layer_i + 1])
+            if layer_i != len(encode_layers) - 2:
+                Layers[f"relu_{layer_i}"] = nn.ReLU()
 
         # 状态输入编码器
         self.x_encode_net = nn.Sequential(Layers)
         # 控制输入编码器：恒等映射（直接返回原始控制输入）
         self.u_encode_net = nn.Identity()
-        
+
     def x_encoder(self, x):
         feat = self.x_encode_net(x)
         return torch.cat([x, feat], dim=-1)
-          # concat 原始 + 特征
-    
+        # concat 原始 + 特征
+
     def x_decoder(self, x_emb):
         return self.lC(x_emb)
-    
-    def u_encoder(self, x , u):
+
+    def u_encoder(self, x, u):
         return self.u_encode_net(u)
-    
+
     def u_decoder(self, u_emb):
-        return u_emb    
-    
+        return u_emb
+
+
 class KoopmanBlinear(Koopmanlinear):
     def __init__(self, x_dim, u_dim, encode_layers, u_z, use_stable):
         super().__init__(x_dim, u_dim, encode_layers, use_stable)
@@ -45,6 +49,7 @@ class KoopmanBlinear(Koopmanlinear):
         self.H = nn.Linear(self.Nkoopman * self.u_dim, self.Nkoopman, bias=False)
         nn.init.zeros_(self.H.weight)
         self.u_z = u_z
+
     def koopman_operation(self, x_emb, u_emb):
         # u_emb: u_dim   x_emb:Nkoopman
         if self.use_stable:
@@ -54,12 +59,12 @@ class KoopmanBlinear(Koopmanlinear):
             linear_term = self.lA(x_emb) + self.lB(u_emb)
         # 双线性项  u_dim*Nkoopman
         if self.u_z:
-            z_kron_u = torch.einsum('bi,bj->bij', u_emb, x_emb).reshape(x_emb.shape[0], -1)
+            z_kron_u = torch.einsum("bi,bj->bij", u_emb, x_emb).reshape(x_emb.shape[0], -1)
         else:
-            z_kron_u = torch.einsum('bi,bj->bij', x_emb, u_emb).reshape(x_emb.shape[0], -1)
+            z_kron_u = torch.einsum("bi,bj->bij", x_emb, u_emb).reshape(x_emb.shape[0], -1)
         bilinear_term = self.H(z_kron_u)
         return linear_term + bilinear_term
-    
+
     def build_permutation_matrix(self, n, m):
         # 返回 P ∈ R^{nm × nm}，将 vec(u⊗z) → vec(z⊗u)
         if self.u_z:
@@ -71,53 +76,60 @@ class KoopmanBlinear(Koopmanlinear):
                     P[col, row] = 1
         else:
             P = np.eye(n * m)
-        return P   
-    
+        return P
+
     def get_Hi_list(self):
         Hd = self.H.weight.clone()
         if self.u_z:
-            H_blocks = [Hd[:, i*self.Nkoopman:(i+1)*self.Nkoopman] for i in range(self.u_dim)]  # 每块 shape: (N, N)
+            H_blocks = [
+                Hd[:, i * self.Nkoopman : (i + 1) * self.Nkoopman] for i in range(self.u_dim)
+            ]  # 每块 shape: (N, N)
         else:
-            H_blocks = [Hd[:, j*self.u_dim:(j+1)*self.u_dim] for j in range(self.Nkoopman)]  # 每块 shape: (N, m)        
+            H_blocks = [
+                Hd[:, j * self.u_dim : (j + 1) * self.u_dim] for j in range(self.Nkoopman)
+            ]  # 每块 shape: (N, m)
         return H_blocks
 
     def get_Hi_numpy(self):
         P = self.build_permutation_matrix(self.u_dim, self.Nkoopman)  # 交换矩阵
-        Hd = self.H.weight.cpu().detach().numpy() @ P.T # (32, 224) 转成 z⊗u 的 H
+        Hd = self.H.weight.cpu().detach().numpy() @ P.T  # (32, 224) 转成 z⊗u 的 H
         H_hat_list = []
         for j in range(self.Nkoopman):
             start_idx = j * self.u_dim
-            end_idx = (j+1) * self.u_dim
+            end_idx = (j + 1) * self.u_dim
             H_hat_j = Hd[:, start_idx:end_idx].copy()  # (32, 7)
-            H_hat_list.append(H_hat_j)    
+            H_hat_list.append(H_hat_j)
         return H_hat_list
-    
+
+
 class DKN(Koopmanlinear):
     def __init__(self, x_dim, u_dim, encode_layers):
         super().__init__(x_dim, u_dim, encode_layers)
         # 双线性部分
         BLayers = OrderedDict()
-        bilinear_layers = [x_dim+u_dim, 64, 64, 64, u_dim]
-        for i in range(len(bilinear_layers)-1):
-            BLayers[f"linear_{i}"] = nn.Linear(bilinear_layers[i], bilinear_layers[i+1])
-            if i != len(bilinear_layers)-2:
+        bilinear_layers = [x_dim + u_dim, 64, 64, 64, u_dim]
+        for i in range(len(bilinear_layers) - 1):
+            BLayers[f"linear_{i}"] = nn.Linear(bilinear_layers[i], bilinear_layers[i + 1])
+            if i != len(bilinear_layers) - 2:
                 BLayers[f"relu_{i}"] = nn.ReLU()
         self.u_encode_net = nn.Sequential(BLayers)
-    def u_encoder(self, x , u):
+
+    def u_encoder(self, x, u):
         return self.u_encode_net(torch.cat([x, u], dim=-1))
-    
+
+
 class DKAC(Koopmanlinear):
     def __init__(self, x_dim, u_dim, encode_layers):
         super().__init__(x_dim, u_dim, encode_layers)
         # 双线性部分
         BLayers = OrderedDict()
         bilinear_layers = [x_dim, 64, 64, 64, u_dim]
-        for i in range(len(bilinear_layers)-1):
-            BLayers[f"linear_{i}"] = nn.Linear(bilinear_layers[i], bilinear_layers[i+1])
-            if i != len(bilinear_layers)-2:
+        for i in range(len(bilinear_layers) - 1):
+            BLayers[f"linear_{i}"] = nn.Linear(bilinear_layers[i], bilinear_layers[i + 1])
+            if i != len(bilinear_layers) - 2:
                 BLayers[f"relu_{i}"] = nn.ReLU()
         self.u_encode_net = nn.Sequential(BLayers)
-    def u_encoder(self, x , u):
+
+    def u_encoder(self, x, u):
         gu = self.u_encode_net(x)
         return gu * u
- 

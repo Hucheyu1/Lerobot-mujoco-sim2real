@@ -1,32 +1,31 @@
-import time
 import logging
+import time
 from typing import Any
 
-# 假设你提供的原始类保存在 lerobot/robots/so101_follower.py 中
-# 或者你可以把下面的 SO101Follower 类定义直接贴在这个文件上面
-from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
 from lerobot.motors.feetech import OperatingMode
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
+# 假设你的环境已经安装了 lerobot 并且路径正确
+# 根据你提供的文件结构导入
+from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
+
 logger = logging.getLogger(__name__)
+
 
 class HybridSO101Follower(SO101Follower):
     """
-    SO-101 的增强版。
-    既支持原来的 '位置控制' (send_action 传入 .pos),
-    也支持切换到 '速度控制' (send_action 传入 .vel)。
+    SO-101 增强版驱动类。
+    支持在运行时动态切换 '位置控制' 和 '速度控制'。
     """
 
     def __init__(self, config: SO101FollowerConfig):
         super().__init__(config)
-        # 记录当前模式，默认为位置模式
-        self._current_mode = "position" 
+        # 记录当前模式，初始为位置模式 (lerobot 默认)
+        self._current_mode = "position"
 
     def set_control_mode(self, mode: str):
         """
-        高层接口：切换控制模式。
-        :param mode: 'position' (位置模式) 或 'velocity' (速度模式)
+        切换控制模式。
+        :param mode: 'position' (位置闭环) 或 'velocity' (速度闭环)
         """
         if mode not in ["position", "velocity"]:
             raise ValueError("Mode must be 'position' or 'velocity'")
@@ -37,155 +36,193 @@ class HybridSO101Follower(SO101Follower):
 
         logger.info(f"Switching to {mode} mode...")
 
-        # 1. 必须先关闭扭矩，否则无法修改 Operating_Mode
+        # 1. 必须先关闭扭矩！
+        # Feetech 舵机规定：只有在扭矩关闭(Torque Off)状态下才能修改 Operating_Mode
         self.bus.disable_torque()
-        time.sleep(0.1) # 安全缓冲
 
-        # 2. 确定 Feetech 的模式值
-        # 0: Position Control, 1: Speed Closed-Loop Control
-        # 注意：如果 lerobot 库里没有 OperatingMode.VELOCITY，直接用数字 1
-        target_val = 0 if mode == "position" else 1 
+        # 给一点时间让总线处理
+        time.sleep(0.1)
 
-        # 3. 批量写入模式
+        # 2. 确定 Feetech 的 Operating_Mode 值
+        # 查阅 STS3215 手册:
+        # 0 = Position Control Mode (位置控制)
+        # 1 = Speed Closed-loop Control Mode (速度闭环/轮模式)
+        # 注意：这里我们直接使用整数值，以防 OperatingMode枚举类中没有定义 VELOCITY
+        target_val = 0 if mode == "position" else 1
+
+        # 3. 批量写入模式寄存器
+        # 我们遍历总线上的所有电机进行设置
         for motor in self.bus.motors:
             self.bus.write("Operating_Mode", motor, target_val)
 
         # 4. 重新开启扭矩
         self.bus.enable_torque()
-        
+
         # 5. 更新内部状态
         self._current_mode = mode
         logger.info(f"Switched to {mode} mode successfully.")
 
+        # 安全措施：如果是切回位置模式，建议同步一下当前位置作为目标，防止跳变
+        if mode == "position":
+            self.stop()
+
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """
-        重写父类的 send_action。
-        根据当前模式，自动决定是发送位置指令还是速度指令。
+        重写父类的 send_action 以支持速度指令。
         """
         if not self.is_connected:
             raise Exception("Robot not connected")
 
-        # --- 情况 A: 当前是位置模式 ---
+        # ================= 位置模式逻辑 =================
         if self._current_mode == "position":
-            # 检查 action 里是否有 .pos 数据，如果有，直接调用父类原来的逻辑
-            # 父类逻辑处理了安全限位等操作，非常完善
-            if any(k.endswith(".pos") for k in action):
-                return super().send_action(action)
-            else:
-                logger.warning("In Position Mode but received no .pos actions.")
+            # 过滤出 .pos 指令
+            pos_action = {k: v for k, v in action.items() if k.endswith(".pos")}
+
+            if not pos_action:
                 return {}
 
-        # --- 情况 B: 当前是速度模式 ---
+            # 直接调用父类方法，复用其安全限位逻辑
+            return super().send_action(action)
+
+        # ================= 速度模式逻辑 =================
         elif self._current_mode == "velocity":
             # 提取 .vel 后缀的数据
-            goal_vel = {
-                key.removesuffix(".vel"): val 
-                for key, val in action.items() 
-                if key.endswith(".vel")
-            }
+            # key 格式转换: "wrist_roll.vel" -> "wrist_roll"
+            goal_vel = {key.removesuffix(".vel"): val for key, val in action.items() if key.endswith(".vel")}
 
             if not goal_vel:
                 return {}
 
             # 直接写入 Goal_Speed 寄存器
-            # 在模式 1 下，Goal_Speed 就是目标速度
-            self.bus.sync_write("Goal_Speed", goal_vel)
-            
-            # 返回发送的数据用于记录
+            # STS3215 在模式 1 下，Goal_Speed 寄存器(地址通常是 44) 控制转速
+            # 单位通常是：符号代表方向，数值代表速度大小
+            # 注意：这里的 normalize=False，意味着我们需要传原生单位或自己处理归一化
+            # 如果需要 normalize，需要在 MotorsBus 里配置 normalized_data
+            self.bus.sync_write("Goal_Velocity", goal_vel, normalize=False)
+
             return {f"{motor}.vel": val for motor, val in goal_vel.items()}
 
         return {}
 
     def stop(self):
-        """紧急停止：发送 0 速度"""
+        """
+        安全停止函数
+        """
         if self._current_mode == "velocity":
-            zeros = {f"{name}.vel": 0.0 for name in self.bus.motors}
+            # 速度模式下，发送 0 速度
+            zeros = {f"{name}.vel": 0 for name in self.bus.motors}
             self.send_action(zeros)
         else:
-            # 位置模式下，读取当前位置并作为目标位置发送（原地锁住）
-            current = self.get_observation()
-            hold_pos = {k: v for k, v in current.items() if k.endswith(".pos")}
+            # 位置模式下，读取当前实际位置，并将其设为目标位置（原地保持）
+            current_obs = self.get_observation()
+            hold_pos = {k: v for k, v in current_obs.items() if k.endswith(".pos")}
             self.send_action(hold_pos)
 
 
 # ==========================================
-# 演示代码：如何使用这个增强类
+# 演示 Demo
 # ==========================================
-
 def main():
-    # 1. 初始化配置 (替换为你的实际端口)
-    config = SO101FollowerConfig(port="COM24", id="so101_follower", use_degrees=True)
-    
-    # 2. 使用我们要的增强类
+    # 配置日志输出
+    logging.basicConfig(level=logging.INFO)
+
+    # 1. 初始化配置 (请修改为你的实际端口)
+    # Windows 示例: "COM3", Linux/Mac 示例: "/dev/ttyUSB0"
+    PORT = "COM24"
+    config = SO101FollowerConfig(port=PORT, id="so101_follower", use_degrees=True)
+
+    # 2. 实例化增强后的机器人
     robot = HybridSO101Follower(config)
 
     try:
-        print("1. 连接机器人...")
+        print(f"Connecting to robot on {PORT}...")
         robot.connect()
-        
-        # ================= 位置控制演示 =================
-        print(">>> 当前模式: 位置控制 (Position)")
-        print("   移动到一个测试位置...")
-        
-        target_pos = {
-            "shoulder_pan.pos": 0,
-            "shoulder_lift.pos": -90,
-            "elbow_flex.pos": 90,
-            "wrist_flex.pos": 0,
-            "wrist_roll.pos": 0,
-            "gripper.pos": 50
-        }
-        robot.send_action(target_pos)
-        time.sleep(3) # 等待到达
 
-        # ================= 切换模式 =================
-        input("按 Enter 切换到 [速度控制] 模式...")
+        # -------------------------------------------------
+        # 阶段 1: 位置控制测试
+        # -------------------------------------------------
+        print("\n=== [阶段 1] 位置控制模式 ===")
+        print("Moving to Home position...")
+
+        # 定义一个安全的位置 (单位: 度, 因为 use_degrees=True)
+        home_pos = {
+            "shoulder_pan.pos": -6,
+            "shoulder_lift.pos": -98,
+            "elbow_flex.pos": 97,
+            "wrist_flex.pos": 15,
+            "wrist_roll.pos": 0,
+            "gripper.pos": 33,
+        }
+        robot.send_action(home_pos)
+        time.sleep(3.0)  # 等待运动完成
+
+        # -------------------------------------------------
+        # 阶段 2: 切换到速度模式
+        # -------------------------------------------------
+        print("\n=== [阶段 2] 切换到速度模式 ===")
+        # 此时机械臂会瞬间失去扭矩力维持，然后立刻恢复扭矩
         robot.set_control_mode("velocity")
 
-        # ================= 速度控制演示 =================
-        print(">>> 当前模式: 速度控制 (Velocity)")
-        print("   注意：这里是让电机转动，而不是去某个坐标")
+        # -------------------------------------------------
+        # 阶段 3: 速度控制测试 (只转动腕部)
+        # -------------------------------------------------
+        print("Rotating Wrist Roll joint continuously...")
 
-        # 动作 1: 手腕旋转
-        print("   动作: 手腕旋转 (30度/秒)...")
-        vel_action = {
-            "shoulder_pan.vel": 0,
-            "shoulder_lift.vel": 0,
-            "elbow_flex.vel": 0,
-            "wrist_flex.vel": 0,
-            "wrist_roll.vel": 30.0, # 速度值
-            "gripper.vel": 0
-        }
-        robot.send_action(vel_action)
-        time.sleep(2.0) # 转2秒
+        # STS3215 速度单位说明：
+        # 通常原生单位大概是 steps/sec 或者内部单位。
+        # 如果 normalize=False，这里的 200 是原生值。
+        # 如果觉得太快或太慢，请调整数值。STS3215 最大速度约数千。
+        SPEED_VAL = 200
 
-        # 动作 2: 停止
-        print("   停止！")
+        # 动作 A: 正向旋转
+        vel_cmd = {"wrist_roll.vel": SPEED_VAL}
+        # 其他关节默认为 0 (不给指令即不写入，或者需要显式给0以防漂移)
+        # 为了安全，最好给其他关节发 0
+        for m in robot.bus.motors:
+            if m != "wrist_roll":
+                vel_cmd[f"{m}.vel"] = 0
+
+        robot.send_action(vel_cmd)
+        time.sleep(2.0)  # 旋转 2 秒
+
+        # 动作 B: 停止
+        print("Stopping...")
         robot.stop()
         time.sleep(1.0)
 
-        # 动作 3: 反转
-        print("   动作: 手腕反转 (-30度/秒)...")
-        vel_action["wrist_roll.vel"] = -30.0
-        robot.send_action(vel_action)
+        # 动作 C: 反向旋转
+        print("Rotating Wrist Roll joint REVERSE...")
+        vel_cmd["wrist_roll.vel"] = -SPEED_VAL
+        robot.send_action(vel_cmd)
         time.sleep(2.0)
 
-        # 停止
         robot.stop()
+        print("Stopped.")
 
-        # ================= 切回位置 =================
-        input("按 Enter 切回 [位置控制] 模式并退出...")
+        # -------------------------------------------------
+        # 阶段 4: 切回位置模式
+        # -------------------------------------------------
+        print("\n=== [阶段 3] 切回位置模式 ===")
         robot.set_control_mode("position")
-        print(">>> 已切回位置模式，机器人将保持在当前姿态。")
 
+        print("Moving back to Home position...")
+        robot.send_action(home_pos)
+        time.sleep(2.0)
+
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"\nError occurred: {e}")
+        import traceback
+
+        traceback.print_exc()
     finally:
         if robot.is_connected:
-            # 断开前先停止，比较安全
+            print("Disconnecting...")
             robot.stop()
             robot.disconnect()
-            print("机器人已断开。")
+            print("Done.")
+
 
 if __name__ == "__main__":
     main()

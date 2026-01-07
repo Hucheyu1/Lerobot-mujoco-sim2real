@@ -8,6 +8,7 @@ import numpy as np
 from lerobot.cameras.opencv import OpenCVCameraConfig
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 
+
 def create_real_robot(uid: str = "so100") -> Robot:
     """Wrapper function to map string UIDS to real robot configurations. Primarily for saving a bit of code for users when they fork the repository. They can just edit the camera, id etc. settings in this one file."""
     if uid == "so100":

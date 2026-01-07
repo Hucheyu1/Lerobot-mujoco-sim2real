@@ -1,57 +1,33 @@
-from .KoopmanBase import Koopmanlinear, KoopmanBlinear
-from .Koopform import Koopformer,Koopformer_KAN
+from .InvertKoopman import InvertKoopmanNetBLinear, InvertKoopmanNetLinear
 from .KANKoopman import KANKoopmanNet
-from .KoopmanLSTM import KoopmanLSTMlinear,KoopmanLSTMlinear_KAN
-from .InvertKoopman import InvertKoopmanNetLinear, InvertKoopmanNetBLinear
+from .Koopform import Koopformer, Koopformer_KAN
+from .KoopmanBase import KoopmanBlinear, Koopmanlinear
+from .KoopmanLSTM import KoopmanLSTMlinear, KoopmanLSTMlinear_KAN
+
+
 def init_model(args):
     print(f"Initiating {args.model}")
     if args.model == "DKUC":
-        model = Koopmanlinear(
-            args.x_dim,
-            args.u_dim,
-            args.layers,
-            args.use_stable
-        ).to(args.device)
-        return model 
+        model = Koopmanlinear(args.x_dim, args.u_dim, args.layers, args.use_stable).to(args.device)
+        return model
     elif args.model == "DBKN":
-        model = KoopmanBlinear(
-            args.x_dim,
-            args.u_dim,
-            args.layers,
-            args.u_z,
-            args.use_stable
-        ).to(args.device)
+        model = KoopmanBlinear(args.x_dim, args.u_dim, args.layers, args.u_z, args.use_stable).to(args.device)
         return model
     elif args.model == "Koopformer":
-        model = Koopformer(
-            args.x_dim,
-            args.u_dim,
-            args.seq_len,
-            args.d_model,
-            args.use_stable,
-            args.use_decoder
-        ).to(args.device)
-        return model     
+        model = Koopformer(args.x_dim, args.u_dim, args.seq_len, args.d_model, args.use_stable, args.use_decoder).to(
+            args.device
+        )
+        return model
     elif args.model == "Koopformer_KAN":
         model = Koopformer_KAN(
-            args.x_dim,
-            args.u_dim,
-            args.seq_len,
-            args.d_model,
-            args.use_stable,
-            args.use_decoder
+            args.x_dim, args.u_dim, args.seq_len, args.d_model, args.use_stable, args.use_decoder
         ).to(args.device)
-        return model    
+        return model
     elif args.model == "KANKoopman":
         model = KANKoopmanNet(
-            args.x_dim,
-            args.u_dim,
-            args.kan_layers,
-            args.kan_params,
-            args.use_stable,
-            args.use_decoder
+            args.x_dim, args.u_dim, args.kan_layers, args.kan_params, args.use_stable, args.use_decoder
         ).to(args.device)
-        return model   
+        return model
     elif args.model == "KoopmanLSTMlinear":
         model = KoopmanLSTMlinear(
             args.x_dim,
@@ -60,9 +36,9 @@ def init_model(args):
             args.LSTM_encode_layers,
             args.LSTM_Hidden,
             args.use_stable,
-            args.use_decoder
+            args.use_decoder,
         ).to(args.device)
-        return model     
+        return model
     elif args.model == "KoopmanLSTMlinear_KAN":
         model = KoopmanLSTMlinear_KAN(
             args.x_dim,
@@ -71,9 +47,9 @@ def init_model(args):
             args.kan_layers,
             args.LSTM_Hidden,
             args.use_stable,
-            args.use_decoder
+            args.use_decoder,
         ).to(args.device)
-        return model  
+        return model
     elif args.model == "IKN":
         model = InvertKoopmanNetLinear(
             args.x_dim,
@@ -84,7 +60,7 @@ def init_model(args):
             args.u_blocks,
             args.u_channels,
             args.u_hiddens,
-            args.use_stable
+            args.use_stable,
         ).to(args.device)
         return model
     elif args.model == "IBKN":
@@ -98,9 +74,9 @@ def init_model(args):
             args.u_channels,
             args.u_hiddens,
             args.u_z,
-            args.use_stable
+            args.use_stable,
         ).to(args.device)
-        return model          
+        return model
 
     else:
         raise ValueError(f"Model {args.model} not implemented!")

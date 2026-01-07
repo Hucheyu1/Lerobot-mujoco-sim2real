@@ -1,19 +1,24 @@
-import mujoco
-import numpy as np
-import math
 import sys
+
+import numpy as np
+
 # 导入所有必要的库
 from dm_control.mujoco import Physics  # 关键：导入 dm_control 的 Physics 封装
-from dm_control.utils.inverse_kinematics import qpos_from_site_pose # 关键：导入 IK 函数
+from dm_control.utils.inverse_kinematics import qpos_from_site_pose  # 关键：导入 IK 函数
+
 from .casadi_ik import Kinematics
+
+
 # --- 笛卡尔轨迹生成器 (使用 dm_control IK 的完整版本) ---
 class CartesianTrajectoryGenerator:
     """
     生成笛卡尔空间(x, y, z)的轨迹，并同时计算出对应的关节角度。
     本版本使用 dm_control.inverse_kinematics.qpos_from_site_pose 进行逆运动学求解。
     """
-    def __init__(self, model_path: str, ee_site_name: str, num_joints: int, 
-                 idx=1, time_horizon=60, time_steps_per_sec = 5):
+
+    def __init__(
+        self, model_path: str, ee_site_name: str, num_joints: int, idx=1, time_horizon=60, time_steps_per_sec=5
+    ):
         """
         初始化轨迹生成器。
 
@@ -30,12 +35,12 @@ class CartesianTrajectoryGenerator:
         self.time_horizon = time_horizon
         self.time_steps = time_steps_per_sec * time_horizon
         self.time_vector = np.linspace(0, self.time_horizon, self.time_steps)
-        
+
         # 机器人和IK参数
         self.model_path = model_path
         self.ee_site_name = ee_site_name
         self.num_joints = num_joints
-        
+
         # 这些参数可以根据您的机器人工作空间进行调整
         self.traj_scale = 0.5
 
@@ -49,7 +54,7 @@ class CartesianTrajectoryGenerator:
             # 使用 dm_control 的 Physics 对象封装模型和数据
             # qpos_from_site_pose 函数需要这个类型的输入
             self.physics = Physics.from_xml_path(self.model_path)
-            
+
             # 获取所有可动的、非自由浮动的关节名称
             # 这对于调用qpos_from_site_pose至关重要
             self.joint_names = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
@@ -59,28 +64,30 @@ class CartesianTrajectoryGenerator:
 
             print(f"找到 {len(self.joint_names)} 个可动关节: {self.joint_names}")
             if len(self.joint_names) < self.num_joints:
-                print(f"警告：模型中找到的可动关节数量 ({len(self.joint_names)}) 少于指定的 num_joints ({self.num_joints})")
-        
+                print(
+                    f"警告：模型中找到的可动关节数量 ({len(self.joint_names)}) 少于指定的 num_joints ({self.num_joints})"
+                )
+
         except Exception as e:
             print(f"错误：无法从'{self.model_path}'加载IK模型。 {e}")
             sys.exit(1)
-            
+
         # 检查 site 是否存在
         try:
-            _ = self.physics.model.name2id(self.ee_site_name, 'site')
+            _ = self.physics.model.name2id(self.ee_site_name, "site")
         except KeyError:
             raise ValueError(f"错误: 在模型中找不到名为 '{self.ee_site_name}' 的 site。请检查XML文件。")
-        
+
         # 设置一个合理的初始关节姿态 (通常是全零姿态)
         home_qpos = np.zeros(self.physics.model.nq)
         with self.physics.reset_context():
             self.physics.data.qpos[:] = home_qpos
-        
+
         print("IK求解器初始化完成。")
 
     def _solve_ik(self, target_pos: np.ndarray, target_quat: np.ndarray) -> np.ndarray:
         """
-        内部IK求解函数，使用 dm_control 的 qpos_from_site_pose。
+        内部IK求解函数, 使用 dm_control 的 qpos_from_site_pose。
 
         Args:
             target_pos (np.ndarray): 目标位置 [x, y, z]。
@@ -94,28 +101,28 @@ class CartesianTrajectoryGenerator:
 
         # 调用 dm_control 的 IK 函数
         ik_result = qpos_from_site_pose(
-            physics=self.physics,                   # 传入 dm_control 的 Physics 对象
-            site_name=self.ee_site_name,            # 目标 site 名称
-            target_pos=target_pos,                  # 目标位置
-            target_quat=target_quat,                # 目标姿态
-            joint_names=self.joint_names,           # 指定哪些关节可以动
-            inplace=True,                           # 设置为True，直接修改self.physics.data，效率更高
-            max_steps=100,                          # 最大迭代次数
-            tol=1e-6,                               # 求解精度阈值
-            rot_weight=0.5,                         # 姿态误差的权重 (0.0到1.0之间)
-            regularization_strength=1e-2            # 正则化强度，防止奇异点问题，增加稳定性
+            physics=self.physics,  # 传入 dm_control 的 Physics 对象
+            site_name=self.ee_site_name,  # 目标 site 名称
+            target_pos=target_pos,  # 目标位置
+            target_quat=target_quat,  # 目标姿态
+            joint_names=self.joint_names,  # 指定哪些关节可以动
+            inplace=True,  # 设置为True，直接修改self.physics.data，效率更高
+            max_steps=100,  # 最大迭代次数
+            tol=1e-6,  # 求解精度阈值
+            rot_weight=0.5,  # 姿态误差的权重 (0.0到1.0之间)
+            regularization_strength=1e-2,  # 正则化强度，防止奇异点问题，增加稳定性
         )
-        
+
         # 检查求解结果
         if ik_result.success:
             # 求解成功，返回与机械臂相关的关节角度
             # self.physics.data.qpos 已经被 inplace 修改，直接复制即可
-            return self.physics.data.qpos[:self.num_joints].copy()
+            return self.physics.data.qpos[: self.num_joints].copy()
         else:
             # 如果求解失败，返回None
             return None
 
-    def generate(self, traj_name='Fig8', target_orientation=np.array([1.0, 0.0, 0.0, 0.0])):
+    def generate(self, traj_name="Fig8", target_orientation=np.array([1.0, 0.0, 0.0, 0.0])):
         """
         生成指定的笛卡尔轨迹和对应的关节角度轨迹。
         这个方法将一系列的笛卡尔坐标点，通过逆运动学，转换为一系列的关节角度。
@@ -135,60 +142,60 @@ class CartesianTrajectoryGenerator:
         t_param = 1.6 + 0.02 * np.linspace(0, self.time_horizon * 5, len(self.time_vector))
         print(f"正在生成 '{traj_name}' 笛卡尔轨迹 (平面设置 idx={self.idx})")
 
-        if traj_name == 'Fig8':
-            if self.idx == 1: # Y-Z平面
+        if traj_name == "Fig8":
+            if self.idx == 1:  # Y-Z平面
                 a = 0.2 * self.traj_scale
                 b = 0.2 * self.traj_scale
                 x = 0.4 * np.ones((len(t_param), 1))
-                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-            else: # X-Y平面
-                a = 0.2 * self.traj_scale 
+                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+            else:  # X-Y平面
+                a = 0.2 * self.traj_scale
                 b = 0.2 * self.traj_scale
                 z = 0.2 * np.ones((len(t_param), 1))
-                x = np.expand_dims(0.3 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
+                x = np.expand_dims(0.3 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
-        
-        elif traj_name == 'Circle':
-            if self.idx == 1: # Y-Z平面
+
+        elif traj_name == "Circle":
+            if self.idx == 1:  # Y-Z平面
                 radius = 0.1
                 x = 0.4 * np.ones((len(t_param), 1))
                 center_y, center_z = 0.0, 0.2
                 y = np.expand_dims(center_y + radius * np.cos(t_param), axis=1)
                 z = np.expand_dims(center_z + radius * np.sin(t_param), axis=1)
-            else: # X-Y平面
+            else:  # X-Y平面
                 radius = 0.1
                 z = 0.2 * np.ones((len(t_param), 1))
                 center_x, center_y = 0.3, 0.0
                 x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
                 y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
-        elif traj_name == 'FigStar':
+        elif traj_name == "FigStar":
             # --- 1. 定义几何参数 ---
             # 外部圆（五角星的五个尖角所在圆）的参数
             a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
-            center_x, center_y, center_z = 0.4, 0.0, 0.2 # 统一中心点
+            center_x, center_y, center_z = 0.4, 0.0, 0.2  # 统一中心点
             # 定义五角星的半径和中心点
-            radius = a         # 外部半径（尖角到中心）
+            radius = a  # 外部半径（尖角到中心）
             # 根据 self.idx 确定 2D 形状的中心偏移
             if self.idx == 1:
-                 # Y-Z 平面：形状中心是 (center_y, center_z)
+                # Y-Z 平面：形状中心是 (center_y, center_z)
                 center_prime_0 = center_y
                 center_prime_1 = center_z
             else:
                 # X-Y 平面：形状中心是 (center_x, center_y)
                 center_prime_0 = center_x
-                center_prime_1 = center_y      
+                center_prime_1 = center_y
             eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
             # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
             Star_points_2D = np.zeros((11, 2))
             for i in range(5):
                 # 尖角 (Outer Points)
-                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2) 
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2)
                 Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
                 Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
-                
+
                 # 凹陷点 (Inner Points)
                 theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
                 Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
@@ -197,9 +204,9 @@ class CartesianTrajectoryGenerator:
             Star_points_2D[-1, :] = Star_points_2D[0, :]
             # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
             # 计算总时间步数
-            num_steps = len(t_param) # 使用您的 t 或 self.time_vector 
+            num_steps = len(t_param)  # 使用您的 t 或 self.time_vector
             # 假设轨迹分段均匀 (10个线段)
-            num_segments = 10 
+            num_segments = 10
             refs = np.zeros((num_steps, 2))
             # 计算每段轨迹包含的步数
             each_num = num_steps // num_segments
@@ -211,39 +218,39 @@ class CartesianTrajectoryGenerator:
                 num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
                 for j in range(num_interp_points):
                     t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
-                    
+
                     refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
                 current_step += num_interp_points
             # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
-            if self.idx==1:
-                x = center_x * np.ones((num_steps, 1)) 
-                y = refs[:, 0].reshape(-1, 1) # Y 对应 2D 坐标的第一个分量 (x')
-                z = refs[:, 1].reshape(-1, 1) # Z 对应 2D 坐标的第二个分量 (y')
+            if self.idx == 1:
+                x = center_x * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)  # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1)  # Z 对应 2D 坐标的第二个分量 (y')
             else:
-                x = refs[:, 0].reshape(-1, 1) 
-                y = refs[:, 1].reshape(-1, 1) 
-                z = center_z * np.ones((num_steps, 1))    
-            xyz_coords = np.concatenate( (x, y, z), axis = 1)
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = center_z * np.ones((num_steps, 1))
+            xyz_coords = np.concatenate((x, y, z), axis=1)
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
 
         print(f"笛卡尔轨迹生成完毕, 共 {len(xyz_coords)} 个点。")
-        
+
         # 2. 求解逆运动学，将笛卡尔轨迹转换为关节角度轨迹
         print("开始将笛卡尔轨迹转换为关节角度 (使用 dm_control IK)...")
         joint_angles_trajectory = []
-        
+
         # 重置物理状态到home位置，作为第一次IK求解的起点
         with self.physics.reset_context():
             self.physics.data.qpos[:] = np.zeros(self.physics.model.nq)
-            
+
         for i, pos in enumerate(xyz_coords):
             # 保存当前成功解，以备下次失败时使用
             last_successful_qpos = self.physics.data.qpos.copy()
-            
+
             # 对每个笛卡尔坐标点调用IK求解器
             q_sol = self._solve_ik(pos, target_orientation)
-            
+
             if q_sol is not None:
                 # 如果求解成功，将关节角度添加到轨迹列表中
                 joint_angles_trajectory.append(q_sol)
@@ -253,7 +260,7 @@ class CartesianTrajectoryGenerator:
             else:
                 # 如果求解失败
                 print(f"警告: 逆运动学在时间步 {i} (目标位置: {np.round(pos, 3)}) 求解失败。")
-                
+
                 # 使用上一个成功的结果来填充，以保持轨迹的连续性
                 if joint_angles_trajectory:
                     joint_angles_trajectory.append(joint_angles_trajectory[-1])
@@ -263,19 +270,22 @@ class CartesianTrajectoryGenerator:
                 else:
                     # 如果连第一个点都失败了，说明目标点可能完全不可达，或者初始姿态太差
                     raise RuntimeError("轨迹的第一个点IK求解失败,请检查目标位置是否在机器人工作空间内。")
-        
+
         print("关节角度轨迹转换完成。")
-        
+
         # 返回生成的所有数据，这些数据将用于后续的控制和可视化
         return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
+
 
 class CartesianTrajectoryGenerator_pinocchio:
     """
     生成笛卡尔空间轨迹，并使用 Pinocchio+CasADi 进行逆运动学求解，
     最终输出关节角度轨迹。
     """
-    def __init__(self, arm_model_path: str, ee_site_name: str, num_joints: int, 
-                 idx=1, time_horizon=60, time_steps_per_sec=5):
+
+    def __init__(
+        self, arm_model_path: str, ee_site_name: str, num_joints: int, idx=1, time_horizon=60, time_steps_per_sec=5
+    ):
         """
         初始化轨迹生成器及内置的IK求解器。
 
@@ -294,12 +304,12 @@ class CartesianTrajectoryGenerator_pinocchio:
         self.total_steps = int(time_horizon * time_steps_per_sec)
         self.time_vector = np.linspace(0, self.time_horizon, self.total_steps)
         self.traj_scale = 0.5
-        
+
         # IK参数
         self.arm_model_path = arm_model_path
         self.ee_site_name = ee_site_name
         self.num_joints = num_joints
-        
+
         # 初始化IK求解器
         self._initialize_ik_solver()
 
@@ -325,12 +335,12 @@ class CartesianTrajectoryGenerator_pinocchio:
             np.ndarray: 求解出的关节角度（弧度），如果失败则返回 None。
         """
         q_sol, info = self.ik_solver.ik(target_tf)
-        if info['success']:
-            return q_sol[:self.num_joints]
+        if info["success"]:
+            return q_sol[: self.num_joints]
         else:
             return None
 
-    def generate(self, traj_name='Fig8', target_orientation_matrix=np.eye(3)):
+    def generate(self, traj_name="Fig8", target_orientation_matrix=np.eye(3)):
         """
         生成指定的笛卡尔轨迹并求解对应的关节角度轨迹。
 
@@ -348,60 +358,60 @@ class CartesianTrajectoryGenerator_pinocchio:
         t_param = 1.6 + 0.02 * np.linspace(0, self.time_horizon * 5, len(self.time_vector))
         print(f"正在生成 '{traj_name}' 笛卡尔轨迹...")
 
-        if traj_name == 'Fig8':
-            if self.idx == 1: # Y-Z平面
+        if traj_name == "Fig8":
+            if self.idx == 1:  # Y-Z平面
                 a = 0.2 * self.traj_scale
                 b = 0.2 * self.traj_scale
                 x = 0.4 * np.ones((len(t_param), 1))
-                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-            else: # X-Y平面
-                a = 0.2 * self.traj_scale 
+                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+            else:  # X-Y平面
+                a = 0.2 * self.traj_scale
                 b = 0.2 * self.traj_scale
                 z = 0.2 * np.ones((len(t_param), 1))
-                x = np.expand_dims(0.3 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param)**2), axis=1)
+                x = np.expand_dims(0.3 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
-        
-        elif traj_name == 'Circle':
-            if self.idx == 1: # Y-Z平面
+
+        elif traj_name == "Circle":
+            if self.idx == 1:  # Y-Z平面
                 radius = 0.1
                 x = 0.4 * np.ones((len(t_param), 1))
                 center_y, center_z = 0.0, 0.2
                 y = np.expand_dims(center_y + radius * np.cos(t_param), axis=1)
                 z = np.expand_dims(center_z + radius * np.sin(t_param), axis=1)
-            else: # X-Y平面
+            else:  # X-Y平面
                 radius = 0.1
                 z = 0.2 * np.ones((len(t_param), 1))
                 center_x, center_y = 0.3, 0.0
                 x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
                 y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
-        elif traj_name == 'FigStar':
+        elif traj_name == "FigStar":
             # --- 1. 定义几何参数 ---
             # 外部圆（五角星的五个尖角所在圆）的参数
             a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
-            center_x, center_y, center_z = 0.4, 0.0, 0.2 # 统一中心点
+            center_x, center_y, center_z = 0.4, 0.0, 0.2  # 统一中心点
             # 定义五角星的半径和中心点
-            radius = a         # 外部半径（尖角到中心）
+            radius = a  # 外部半径（尖角到中心）
             # 根据 self.idx 确定 2D 形状的中心偏移
             if self.idx == 1:
-                 # Y-Z 平面：形状中心是 (center_y, center_z)
+                # Y-Z 平面：形状中心是 (center_y, center_z)
                 center_prime_0 = center_y
                 center_prime_1 = center_z
             else:
                 # X-Y 平面：形状中心是 (center_x, center_y)
                 center_prime_0 = center_x
-                center_prime_1 = center_y      
+                center_prime_1 = center_y
             eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
             # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
             Star_points_2D = np.zeros((11, 2))
             for i in range(5):
                 # 尖角 (Outer Points)
-                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2) 
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2)
                 Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
                 Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
-                
+
                 # 凹陷点 (Inner Points)
                 theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
                 Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
@@ -410,9 +420,9 @@ class CartesianTrajectoryGenerator_pinocchio:
             Star_points_2D[-1, :] = Star_points_2D[0, :]
             # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
             # 计算总时间步数
-            num_steps = len(t_param) # 使用您的 t 或 self.time_vector 
+            num_steps = len(t_param)  # 使用您的 t 或 self.time_vector
             # 假设轨迹分段均匀 (10个线段)
-            num_segments = 10 
+            num_segments = 10
             refs = np.zeros((num_steps, 2))
             # 计算每段轨迹包含的步数
             each_num = num_steps // num_segments
@@ -424,22 +434,22 @@ class CartesianTrajectoryGenerator_pinocchio:
                 num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
                 for j in range(num_interp_points):
                     t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
-                    
+
                     refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
                 current_step += num_interp_points
             # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
-            if self.idx==1:
-                x = center_x * np.ones((num_steps, 1)) 
-                y = refs[:, 0].reshape(-1, 1) # Y 对应 2D 坐标的第一个分量 (x')
-                z = refs[:, 1].reshape(-1, 1) # Z 对应 2D 坐标的第二个分量 (y')
+            if self.idx == 1:
+                x = center_x * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)  # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1)  # Z 对应 2D 坐标的第二个分量 (y')
             else:
-                x = refs[:, 0].reshape(-1, 1) 
-                y = refs[:, 1].reshape(-1, 1) 
-                z = center_z * np.ones((num_steps, 1))    
-            xyz_coords = np.concatenate( (x, y, z), axis = 1)
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = center_z * np.ones((num_steps, 1))
+            xyz_coords = np.concatenate((x, y, z), axis=1)
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
-        
+
         # 2. 求解逆运动学
         print("开始将笛卡尔轨迹转换为关节角度 (使用 Pinocchio+CasADi IK)...")
         joint_angles_trajectory = []
@@ -449,10 +459,10 @@ class CartesianTrajectoryGenerator_pinocchio:
         for i, pos in enumerate(xyz_coords):
             # 更新目标变换矩阵的位置部分
             target_tf[:3, 3] = pos
-            
+
             # 调用内部IK求解器
             q_sol = self._solve_ik(target_tf)
-            
+
             if q_sol is not None:
                 joint_angles_trajectory.append(q_sol)
             else:
@@ -465,5 +475,3 @@ class CartesianTrajectoryGenerator_pinocchio:
 
         print("关节角度轨迹转换完成。")
         return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
-
-

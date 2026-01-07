@@ -1,12 +1,14 @@
-from torch import nn, Tensor
 import torch
+from torch import Tensor, nn
+
 
 class KoopmanNet(nn.Module):
     """
     Base class for all Koopman network
     """
+
     def __init__(self):
-        super(KoopmanNet, self).__init__()
+        super().__init__()
 
     def x_encoder(self, x: Tensor):
         raise NotImplementedError
@@ -31,18 +33,23 @@ def _orth(w: torch.Tensor) -> torch.Tensor:
     """
     return torch.linalg.qr(w)[0]
 
-def gaussian_init_(n_units, std=1):    
+
+def gaussian_init_(n_units, std=1):
     """高斯初始化函数"""
-    sampler = torch.distributions.Normal(torch.Tensor([0]), torch.Tensor([std/n_units]))
-    Omega = sampler.sample((n_units, n_units))[..., 0]  
+    sampler = torch.distributions.Normal(torch.Tensor([0]), torch.Tensor([std / n_units]))
+    Omega = sampler.sample((n_units, n_units))[..., 0]
     return Omega
+
 
 class StableKoopmanOperator(KoopmanNet):
     """
     一个严格稳定的离散时间库普曼算子模块。
     实现了动力学: z_{t+1} = K @ z_t + B @ u_t
     """
-    def __init__(self, x_dim: int, u_dim: int, encoder_layers, use_stable=False,use_decoder=False, rho_max: float = 0.99):
+
+    def __init__(
+        self, x_dim: int, u_dim: int, encoder_layers, use_stable=False, use_decoder=False, rho_max: float = 0.99
+    ):
         super().__init__()
         self.u_dim = u_dim
         self.x_dim = x_dim
@@ -62,7 +69,7 @@ class StableKoopmanOperator(KoopmanNet):
             self.S_raw = nn.Parameter(torch.randn(self.Nkoopman))
         else:
             # koopman矩阵
-            self.lA = nn.Linear(self.Nkoopman, self.Nkoopman,bias=False)
+            self.lA = nn.Linear(self.Nkoopman, self.Nkoopman, bias=False)
             self.lA.weight.data = gaussian_init_(self.Nkoopman, std=1)
             U, _, V = torch.svd(self.lA.weight.data)
             self.lA.weight.data = torch.mm(U, V.t()) * 0.9
@@ -74,8 +81,8 @@ class StableKoopmanOperator(KoopmanNet):
             self.lC = nn.Linear(self.Nkoopman, self.x_dim, bias=False)
             # 手动初始化权重（单位矩阵 + 零填充）
             with torch.no_grad():
-                self.lC.weight.data[:self.x_dim, :self.x_dim] = torch.eye(self.x_dim)
-                self.lC.weight.data[:, self.x_dim:] = 0.0
+                self.lC.weight.data[: self.x_dim, : self.x_dim] = torch.eye(self.x_dim)
+                self.lC.weight.data[:, self.x_dim :] = 0.0
             self.lC.weight.requires_grad = False
 
     def get_koopman_matrix_K(self) -> torch.Tensor:
@@ -88,7 +95,7 @@ class StableKoopmanOperator(KoopmanNet):
         Sigma = torch.sigmoid(self.S_raw) * self.rho_max
         K = U @ torch.diag(Sigma) @ V.T
         return K
-    
+
     def koopman_operation(self, x_emb: Tensor, u_emb: Tensor):
         """
         在Koopman空间中进行线性演化。
@@ -97,4 +104,4 @@ class StableKoopmanOperator(KoopmanNet):
             K = self.get_koopman_matrix_K()
             return x_emb @ K.T + self.lB(u_emb)
         else:
-            return self.lA(x_emb)+self.lB(u_emb)
+            return self.lA(x_emb) + self.lB(u_emb)
