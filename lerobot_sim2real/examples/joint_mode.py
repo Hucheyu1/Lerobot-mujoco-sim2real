@@ -1,5 +1,4 @@
 import logging
-import time
 
 # 导入 lerobot 的基础类
 from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig

@@ -6,7 +6,6 @@ import time
 # --- lerobot 框架的导入 ---
 from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
 
-
 # ==================== 配置 ====================
 # 机器人串口
 REAL_ROBOT_PORT = "COM24"  # !!! 修改为你的串口 !!!

@@ -1,15 +1,13 @@
+import os
+import sys
+import time
+
 import mujoco
 import numpy as np
-import mujoco_viewer
-import math
-import sys
 
 # 导入所有必要的库
 from dm_control.mujoco import Physics  # 关键：导入 dm_control 的 Physics 封装
 from dm_control.utils.inverse_kinematics import qpos_from_site_pose  # 关键：导入 IK 函数
-import time
-import matplotlib.pyplot as plt
-import os
 
 
 # --- 笛卡尔轨迹生成器 (使用 dm_control IK 的完整版本) ---

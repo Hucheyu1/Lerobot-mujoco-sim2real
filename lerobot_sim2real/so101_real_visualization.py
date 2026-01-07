@@ -1,16 +1,16 @@
-import zmq
 import json
+import logging
 import os
 import time
-import math
-import logging
 from typing import Any
+
 import numpy as np
 import rerun as rr
+import zmq
+from casadi_ik import Kinematics
 
 # --- lerobot 框架的导入 ---
 from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig
-from casadi_ik import Kinematics
 
 # ==================== 配置常量 ====================
 JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"]

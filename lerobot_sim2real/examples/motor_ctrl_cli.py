@@ -1,6 +1,5 @@
 import argparse
 import logging
-from typing import Dict
 import sys
 
 # 导入我们之前设计的增强版机器人控制器
@@ -38,7 +37,7 @@ def print_joint_diagnostics(robot: ControllableSO101Robot, joint_name: str):
     ]
     # 使用底层bus对象的 read 方法一次性读取多个寄存器
     try:
-        data: Dict[str, int] = robot.bus.read(registers_to_read, {joint_name})
+        data: dict[str, int] = robot.bus.read(registers_to_read, {joint_name})
         for reg, value in data[joint_name].items():
             print(f"  - {reg:<25}: {value}")
     except Exception as e:

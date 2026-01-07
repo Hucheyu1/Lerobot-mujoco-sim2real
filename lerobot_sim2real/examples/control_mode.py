@@ -2,8 +2,6 @@ import logging
 import time
 from typing import Any
 
-from lerobot.motors.feetech import OperatingMode
-
 # 假设你的环境已经安装了 lerobot 并且路径正确
 # 根据你提供的文件结构导入
 from lerobot.robots.so101_follower import SO101Follower, SO101FollowerConfig

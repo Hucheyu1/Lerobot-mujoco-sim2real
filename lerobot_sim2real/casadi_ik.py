@@ -2,11 +2,12 @@
 # https://github.com/unitreerobotics/xr_teleoperate/blob/main/teleop/robot_control/robot_arm_ik.py
 # https://github.com/ccrpRepo/mocap_retarget/blob/master/src/mocap/src/robot_ik.py
 
+import os
+
 import casadi
 import numpy as np
 import pinocchio as pin
 from pinocchio import casadi as cpin
-import os
 
 
 class Kinematics:

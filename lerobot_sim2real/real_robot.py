@@ -1,12 +1,7 @@
-from pathlib import Path
-import gymnasium as gym
 from lerobot.robots.robot import Robot
 from lerobot.robots.so100_follower.config_so100_follower import SO100FollowerConfig
 from lerobot.robots.so101_follower.config_so101_follower import SO101FollowerConfig
 from lerobot.robots.utils import make_robot_from_config
-import numpy as np
-from lerobot.cameras.opencv import OpenCVCameraConfig
-from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 
 
 def create_real_robot(uid: str = "so100") -> Robot:

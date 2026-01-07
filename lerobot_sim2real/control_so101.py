@@ -1,10 +1,10 @@
-import time
 import logging
+import time
+
+from real_robot import create_real_robot
 
 # 配置日志记录，以便看到lerobot库的输出信息
 logging.basicConfig(level=logging.INFO)
-
-from real_robot import create_real_robot
 
 
 def main():

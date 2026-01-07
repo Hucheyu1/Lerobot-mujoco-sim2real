@@ -1,11 +1,10 @@
+import itertools
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-import itertools
-
-import matplotlib.pyplot as plt
 
 
 class Config:
