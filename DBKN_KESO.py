@@ -351,6 +351,7 @@ if __name__ == "__main__":
     EE_SITE_NAME = "gripperframe"  # 你的XML里定义的夹爪中心的 <site>
     NUM_JOINTS = args.u_dim  # 你的机器人关节数量
     use_pinocchio = False
+    idx = 1  # 0 or 1
 
     config_dict = {
         "suffix": args.suffix,
@@ -360,7 +361,7 @@ if __name__ == "__main__":
         "use_nosie": False,
         "use_payload": 0,  # 0,1,2
         "use_eso": False,
-        "traj_name": "FigStar",  # 使用Fig8\FigStar轨迹进行测试
+        "traj_name": "Helix",  # Rectangle, Fig8, FigStar, Heart, Helix, Lissajous
     }
     config = Config(**config_dict)
 
@@ -370,7 +371,7 @@ if __name__ == "__main__":
             model_path=MODEL_XML_PATH,
             ee_site_name=EE_SITE_NAME,
             num_joints=NUM_JOINTS,
-            idx=1,
+            idx=idx,
             time_horizon=60,
             time_steps_per_sec=10,
         )
@@ -379,7 +380,7 @@ if __name__ == "__main__":
         # target_quat = np.array([0, 0, 1, 0])
         # 调用generate方法，反解出关节角度
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name=config_dict["traj_name"],  # Circle, Fig8
+            traj_name=config_dict["traj_name"],
             target_orientation=target_quat,
         )
     else:
@@ -388,12 +389,12 @@ if __name__ == "__main__":
             arm_model_path=ARM_XML_PATH,
             ee_site_name=EE_SITE_NAME,
             num_joints=NUM_JOINTS,
-            idx=0,
+            idx=idx,
             time_horizon=60,
-            time_steps_per_sec=5,
+            time_steps_per_sec=10,
         )
         # 角度（度）
-        angle_degrees = 90  # 0  90
+        angle_degrees = 90 if idx == 0 else 0  # 0  90
         # 转换为弧度
         angle_radians = math.radians(angle_degrees)
         # 计算 cos 和 sin 值
@@ -403,7 +404,7 @@ if __name__ == "__main__":
         target_orientation = np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
         # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
         cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-            traj_name=config_dict["traj_name"],  # Circle, Fig8
+            traj_name=config_dict["traj_name"],
             target_orientation_matrix=target_orientation,
         )
 

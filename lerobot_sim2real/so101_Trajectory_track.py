@@ -100,6 +100,14 @@ class Test(mujoco_viewer.CustomViewer):
             )
             self.handle.user_scn.ngeom += 1
 
+        self.sync()
+        sim_joint_rad = self.data.qpos[:6].copy()
+        # 将弧度转换为角度
+        sim_joint_deg = [math.degrees(q) for q in sim_joint_rad]
+        q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
+        self.communicator.send_data(q_real_target_deg)
+        input("按 Enter 开始...")
+
     def runFunc(self):
         """
         每一帧都会被调用的函数
@@ -212,7 +220,7 @@ if __name__ == "__main__":
 
     # 调用generate方法，反解出关节角度
     cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name="Fig8",  # Circle, Fig8
+        traj_name="Helix",  # Lissajous, Fig8, Helix
         target_orientation=target_quat,
     )
 

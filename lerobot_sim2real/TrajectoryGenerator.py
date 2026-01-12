@@ -1,8 +1,6 @@
-import os
 import sys
-import time
 
-import mujoco
+import casadi_ik  # 导入你的 pinocchio+casadi IK 模块
 import numpy as np
 
 # 导入所有必要的库
@@ -158,20 +156,194 @@ class CartesianTrajectoryGenerator:
                 y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
             xyz_coords = np.concatenate((x, y, z), axis=1)
 
-        elif traj_name == "Circle":
-            if self.idx == 1:  # Y-Z平面
-                radius = 0.1
-                x = 0.4 * np.ones((len(t_param), 1))
-                center_y, center_z = 0.0, 0.2
-                y = np.expand_dims(center_y + radius * np.cos(t_param), axis=1)
-                z = np.expand_dims(center_z + radius * np.sin(t_param), axis=1)
-            else:  # X-Y平面
-                radius = 0.1
-                z = 0.2 * np.ones((len(t_param), 1))
-                center_x, center_y = 0.3, 0.0
-                x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
-                y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
+        elif traj_name == "Rectangle":
+            # --- 1. 定义几何参数 ---
+            width = 0.25 * self.traj_scale
+            height = 0.25 * self.traj_scale
+
+            # 定义中心点
+            if self.idx == 1:  # Y-Z 平面
+                cx, cy = 0.0, 0.2
+                x_fixed = 0.4
+            else:  # X-Y 平面
+                cx, cy = 0.35, 0.0
+                z_fixed = 0.055
+            # --- 2. 定义 4 个顶点 (从左下角开始逆时针) ---
+            # 顺序: 左下 -> 右下 -> 右上 -> 左上 -> 左下 (闭合)
+            rect_points = np.array(
+                [
+                    [cx - width / 2, cy - height / 2],
+                    [cx + width / 2, cy - height / 2],
+                    [cx + width / 2, cy + height / 2],
+                    [cx - width / 2, cy + height / 2],
+                    [cx - width / 2, cy - height / 2],
+                ]
+            )
+            # --- 3. 线性插值 ---
+            num_steps = len(t_param)
+            num_segments = 4  # 矩形有4条边
+            refs = np.zeros((num_steps, 2))
+            each_num = num_steps // num_segments
+            current_step = 0
+
+            for i in range(num_segments):
+                start_pt = rect_points[i, :]
+                end_pt = rect_points[i + 1, :]
+
+                # 确保最后一段填满剩余步数
+                n_points = each_num if i < num_segments - 1 else num_steps - current_step
+
+                # 生成线性插值因子 (0 到 1)
+                t_ = np.linspace(0, 1, n_points).reshape(-1, 1)
+                segment_traj = (1 - t_) * start_pt + t_ * end_pt
+
+                refs[current_step : current_step + n_points, :] = segment_traj
+                current_step += n_points
+
+            # --- 4. 组装坐标 ---
+            if self.idx == 1:  # Y-Z 平面
+                x = x_fixed * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)
+                z = refs[:, 1].reshape(-1, 1)
+            else:  # X-Y 平面
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = z_fixed * np.ones((num_steps, 1))
             xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Heart":
+            # 缩放系数 (心形方程生成的值较大，需要缩小)
+            scale = 0.01 * self.traj_scale
+            # 调整参数 t 使其覆盖 0 到 2pi (根据你的 t_param 范围可能需要调整)
+            # 假设 t_param 是线性增加的，我们取模或归一化来画完整的圆
+            t_circle = np.linspace(0, 2 * np.pi, len(t_param))
+            # 心形参数方程
+            # shape_x 对应水平宽，shape_y 对应垂直高（尖端在下，凹陷在上）
+            shape_x = 16 * np.sin(t_circle) ** 3
+            shape_y = 13 * np.cos(t_circle) - 5 * np.cos(2 * t_circle) - 2 * np.cos(3 * t_circle) - np.cos(4 * t_circle)
+            shape_x = shape_x * scale
+            shape_y = shape_y * scale
+
+            if self.idx == 1:  # Y-Z平面
+                center_y, center_z = 0.0, 0.2
+                x = 0.4 * np.ones((len(t_param), 1))
+                # 注意：心形方程 y 轴对应竖直方向，所以映射到 Z，x 轴映射到 Y
+                y = np.expand_dims(center_y + shape_x, axis=1)
+                z = np.expand_dims(center_z + shape_y, axis=1)
+            else:  # X-Y平面
+                center_x, center_y = 0.35, 0.0
+                z = 0.055 * np.ones((len(t_param), 1))
+                # 旋转90度让心形正对
+                x = np.expand_dims(center_x + shape_y, axis=1)  # 竖直方向映射到 X
+                y = np.expand_dims(center_y + shape_x, axis=1)  # 水平方向映射到 Y
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Helix":
+            radius = 0.1 * self.traj_scale
+            # 螺旋的长度
+            length = 0.2
+            # 生成圆周运动
+            # 这里的 t_param 直接用于周期，如果 t_param 范围大，螺旋圈数就多
+            circle_1 = radius * np.cos(t_param * 2)
+            circle_2 = radius * np.sin(t_param * 2)
+            # 生成轴向推进 (往返运动，使用 sin 避免跳变，或者线性)
+            # 这里使用线性往返：从 0 到 length 再回来
+            # 为了简单，这里演示单向推进然后瞬移，或者用 np.linspace
+            linear_move = np.linspace(-length / 2, length / 2, len(t_param))
+            center_x, center_y = 0.35, 0.0
+            center_z = 0.20
+            x = np.expand_dims(center_x + circle_1, axis=1)
+            y = np.expand_dims(center_y + circle_2, axis=1)
+            z = np.expand_dims(center_z + linear_move, axis=1)  # 高度变化
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Lissajous":
+            A = 0.12 * self.traj_scale
+            B = 0.12 * self.traj_scale
+            # 频率参数 (3:2 的比例会生成一个经典的纽结形状)
+            a_freq = 3.0
+            b_freq = 2.0
+            delta = np.pi / 2  # 相位差
+
+            # 归一化时间参数以保证闭环
+            t_cycle = np.linspace(0, 2 * np.pi, len(t_param))
+
+            val_1 = A * np.sin(a_freq * t_cycle + delta)
+            val_2 = B * np.sin(b_freq * t_cycle)
+
+            if self.idx == 1:  # Y-Z平面
+                center_y, center_z = 0.0, 0.2
+                x = 0.4 * np.ones((len(t_param), 1))
+                y = np.expand_dims(center_y + val_1, axis=1)
+                z = np.expand_dims(center_z + val_2, axis=1)
+            else:  # X-Y平面
+                center_x, center_y = 0.35, 0.0
+                z = 0.2 * np.ones((len(t_param), 1))
+                x = np.expand_dims(center_x + val_2, axis=1)
+                y = np.expand_dims(center_y + val_1, axis=1)
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "FigStar":
+            # --- 1. 定义几何参数 ---
+            # 外部圆（五角星的五个尖角所在圆）的参数
+            a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
+            center_x, center_y, center_z, center_z_1 = 0.4, 0.0, 0.055, 0.2  # 统一中心点
+            # 定义五角星的半径和中心点
+            radius = a  # 外部半径（尖角到中心）
+            # 根据 self.idx 确定 2D 形状的中心偏移
+            if self.idx == 1:
+                # Y-Z 平面：形状中心是 (center_y, center_z)
+                center_prime_0 = center_y
+                center_prime_1 = center_z_1
+            else:
+                # X-Y 平面：形状中心是 (center_x, center_y)
+                center_prime_0 = center_x
+                center_prime_1 = center_y
+            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
+            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
+            Star_points_2D = np.zeros((11, 2))
+            for i in range(5):
+                # 尖角 (Outer Points)
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2)
+                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
+                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
+
+                # 凹陷点 (Inner Points)
+                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
+                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
+                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
+            # 闭合轨迹：第 11 个点 = 第 1 个点
+            Star_points_2D[-1, :] = Star_points_2D[0, :]
+            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
+            # 计算总时间步数
+            num_steps = len(t_param)  # 使用您的 t 或 self.time_vector
+            # 假设轨迹分段均匀 (10个线段)
+            num_segments = 10
+            refs = np.zeros((num_steps, 2))
+            # 计算每段轨迹包含的步数
+            each_num = num_steps // num_segments
+            current_step = 0
+            for i in range(num_segments):
+                start_point = Star_points_2D[i, :]
+                end_point = Star_points_2D[i + 1, :]
+                # 确保最后一段占满剩余所有步数
+                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
+                for j in range(num_interp_points):
+                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
+
+                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
+                current_step += num_interp_points
+            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
+            if self.idx == 1:
+                x = center_x * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)  # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1)  # Z 对应 2D 坐标的第二个分量 (y')
+            else:
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = center_z * np.ones((num_steps, 1))
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
         else:
             raise ValueError(f"未知的轨迹名称: {traj_name}")
 
@@ -218,106 +390,318 @@ class CartesianTrajectoryGenerator:
         return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
 
 
-if __name__ == "__main__":
-    # --- 0. 基本配置 ---
-    # 示例参数，请替换为您自己的模型信息
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_script_dir)
-    MODEL_XML_PATH = os.path.join(project_root, "SOARM101", "SO101", "scene_with_table.xml")
-    EE_SITE_NAME = "gripperframe"  # 你的XML里定义的夹爪中心的 <site>
-    NUM_JOINTS = 5  # 你的机器人关节数量
-    draw_point = 300
+# --- 笛卡尔轨迹生成器 (融合 Pinocchio+CasADi IK) ---
+class CartesianTrajectoryGenerator_Pinocchio:
+    """
+    生成笛卡尔空间轨迹，并使用 Pinocchio+CasADi 进行逆运动学求解，
+    最终输出关节角度轨迹。
+    """
 
-    # 创建生成器实例
-    traj_generator = CartesianTrajectoryGenerator(
-        model_path=MODEL_XML_PATH,
-        ee_site_name=EE_SITE_NAME,
-        num_joints=NUM_JOINTS,
-        idx=1,
-        time_horizon=60,
-        time_steps_per_sec=5,
-    )
+    def __init__(
+        self, arm_model_path: str, ee_site_name: str, num_joints: int, idx=1, time_horizon=60, time_steps_per_sec=5
+    ):
+        """
+        初始化轨迹生成器及内置的IK求解器。
 
-    # 定义末端执行器在整个轨迹中要保持的姿态 (例如，垂直向下)
-    target_quat = None  # 绕X轴旋转90度
-    # target_quat = np.array([0, 0, 1, 0])
+        Args:
+            arm_model_path (str): 用于IK的机械臂模型路径 (e.g., "so101_new_calib.xml")。
+            ee_site_name (str): 末端执行器在XML中的 <site> 名称。
+            num_joints (int): 机械臂的关节数量。
+            idx (int): 轨迹平面设置 (0 for x-y plane, 1 for y-z plane)。
+            time_horizon (float): 轨迹的总时长（秒）。
+            time_steps_per_sec (int): 每秒的轨迹点数量。
+        """
+        # 轨迹参数
+        self.idx = idx
+        self.time_horizon = time_horizon
+        self.time_steps_per_sec = time_steps_per_sec
+        self.total_steps = int(time_horizon * time_steps_per_sec)
+        self.time_vector = np.linspace(0, self.time_horizon, self.total_steps)
+        self.traj_scale = 0.5
 
-    # 调用generate方法，反解出关节角度
-    cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name="Fig8",  # Circle, Fig8
-        target_orientation=target_quat,
-    )
-    # fig = plt.figure(figsize=(10, 8))
-    # ax = fig.add_subplot(111, projection='3d')
-    # # 绘制轨迹
-    # ax.plot(cartesian_points[:, 0], cartesian_points[:, 1], cartesian_points[:, 2])
-    # # 设置坐标轴标签
-    # ax.set_xlabel('X (m)')
-    # ax.set_ylabel('Y (m)')
-    # ax.set_zlabel('Z (m)')
-    # plt.show()
-    # print(cartesian_points)
-    # --- MuJoCo 动态演示 (核心部分) ---
-    print(f"准备在 MuJoCo 中演示，共 {len(joint_angle_traj)} 帧数据...")
+        # IK参数
+        self.arm_model_path = arm_model_path
+        self.ee_site_name = ee_site_name
+        self.num_joints = num_joints
 
-    # 获取底层的 model 和 data 指针
-    # 注意：这里假设你的 traj_generator 类里保存了 self.physics
-    # 如果是 dm_control 风格: model = self.physics.model.ptr, data = self.physics.data.ptr
-    # 如果是原生 mujoco 风格: model = self.model, data = self.data
-    m = traj_generator.physics.model.ptr
-    d = traj_generator.physics.data.ptr
+        # 初始化IK求解器
+        self._initialize_ik_solver()
 
-    with mujoco.viewer.launch_passive(m, d) as viewer:
-        print("MuJoCo Viewer 已启动。")
+    def _initialize_ik_solver(self):
+        """加载模型并准备IK计算环境。"""
+        print("正在为IK求解器初始化 Pinocchio+CasADi 模型...")
+        try:
+            self.ik_solver = casadi_ik.Kinematics(self.ee_site_name)
+            self.ik_solver.buildFromMJCF(self.arm_model_path)
+            print("IK求解器初始化完成。")
+        except Exception as e:
+            print(f"错误：无法从'{self.arm_model_path}'初始化IK模型。 {e}")
+            sys.exit(1)
 
-        # 自动计算采样步长：保证屏幕上最多只画 1000 个球，避免报错
-        total_points = len(cartesian_points)
-        draw_step = max(1, total_points // draw_point)
-        print(f"轨迹点总数: {total_points}, 绘图采样步长: {draw_step}")
-        # 2. 绘制轨迹 (应用采样)
-        # 使用 [::draw_step] 进行切片
-        for pt in cartesian_points[::draw_step]:
-            # 双重保险，防止溢出
-            if viewer.user_scn.ngeom >= viewer.user_scn.maxgeom:
-                break
+    def _solve_ik(self, target_tf: np.ndarray) -> np.ndarray:
+        """
+        内部IK求解函数，使用 Pinocchio+CasADi。
 
-            mujoco.mjv_initGeom(
-                viewer.user_scn.geoms[viewer.user_scn.ngeom],
-                type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                size=[0.002, 0, 0],
-                pos=pt,
-                mat=np.eye(3).flatten(),
-                rgba=[1, 0, 0, 0.3],
-            )
-            viewer.user_scn.ngeom += 1
+        Args:
+            target_tf (np.ndarray): 4x4的目标变换矩阵。
 
-        for i in range(len(joint_angle_traj)):
-            step_start = time.time()
+        Returns:
+            np.ndarray: 求解出的关节角度（弧度），如果失败则返回 None。
+        """
+        q_sol, info = self.ik_solver.ik(target_tf)
+        if info["success"]:
+            return q_sol
+        else:
+            return None
 
-            # 1. 运动控制
-            d.qpos[:NUM_JOINTS] = joint_angle_traj[i]
-            mujoco.mj_forward(m, d)
+    def generate(self, traj_name="Fig8", target_orientation_matrix=np.eye(3)):
+        """
+        生成指定的笛卡尔轨迹并求解对应的关节角度轨迹。
 
-            # 3. 绘制目标点 (不采样)
-            if viewer.user_scn.ngeom < viewer.user_scn.maxgeom:
-                mujoco.mjv_initGeom(
-                    viewer.user_scn.geoms[viewer.user_scn.ngeom],
-                    type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                    size=[0.002, 0, 0],
-                    pos=cartesian_points[i],
-                    mat=np.eye(3).flatten(),
-                    rgba=[0, 1, 0, 1],
+        Args:
+            traj_name (str): 轨迹名称 ('Fig8', 'Circle')。
+            target_orientation_matrix (np.ndarray): 3x3的旋转矩阵，定义末端执行器姿态。
+
+        Returns:
+            tuple: 包含三个元素的元组:
+                - np.ndarray: 形状为 (N, 3) 的笛卡尔坐标点云。
+                - np.ndarray: 形状为 (N, num_joints) 的关节角度轨迹（弧度）。
+                - np.ndarray: 对应的时间向量。
+        """
+        # 1. 生成笛卡尔坐标点 (x, y, z)
+        t_param = 1.6 + 0.02 * np.linspace(0, self.time_horizon * 5, len(self.time_vector))
+        print(f"正在生成 '{traj_name}' 笛卡尔轨迹...")
+
+        if traj_name == "Fig8":
+            if self.idx == 1:  # Y-Z平面
+                a = 0.2 * self.traj_scale
+                b = 0.2 * self.traj_scale
+                x = 0.4 * np.ones((len(t_param), 1))
+                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+            else:  # X-Y平面
+                a = 0.25 * self.traj_scale
+                b = 0.25 * self.traj_scale
+                z = 0.055 * np.ones((len(t_param), 1))
+                x = np.expand_dims(
+                    0.35 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1
                 )
-                viewer.user_scn.ngeom += 1
+                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
+            xyz_coords = np.concatenate((x, y, z), axis=1)
 
-            viewer.sync()
+        elif traj_name == "Rectangle":
+            # --- 1. 定义几何参数 ---
+            width = 0.25 * self.traj_scale
+            height = 0.25 * self.traj_scale
 
-            time_until_next_step = 0.02 - (time.time() - step_start)
-            if time_until_next_step > 0:
-                time.sleep(time_until_next_step)
+            # 定义中心点
+            if self.idx == 1:  # Y-Z 平面
+                cx, cy = 0.0, 0.2
+                x_fixed = 0.4
+            else:  # X-Y 平面
+                cx, cy = 0.35, 0.0
+                z_fixed = 0.055
+            # --- 2. 定义 4 个顶点 (从左下角开始逆时针) ---
+            # 顺序: 左下 -> 右下 -> 右上 -> 左上 -> 左下 (闭合)
+            rect_points = np.array(
+                [
+                    [cx - width / 2, cy - height / 2],
+                    [cx + width / 2, cy - height / 2],
+                    [cx + width / 2, cy + height / 2],
+                    [cx - width / 2, cy + height / 2],
+                    [cx - width / 2, cy - height / 2],
+                ]
+            )
+            # --- 3. 线性插值 ---
+            num_steps = len(t_param)
+            num_segments = 4  # 矩形有4条边
+            refs = np.zeros((num_steps, 2))
+            each_num = num_steps // num_segments
+            current_step = 0
 
-        print("演示结束。")
+            for i in range(num_segments):
+                start_pt = rect_points[i, :]
+                end_pt = rect_points[i + 1, :]
 
-        # 演示结束后保持窗口不关闭，直到手动关闭
-        while viewer.is_running():
-            time.sleep(0.1)
+                # 确保最后一段填满剩余步数
+                n_points = each_num if i < num_segments - 1 else num_steps - current_step
+
+                # 生成线性插值因子 (0 到 1)
+                t_ = np.linspace(0, 1, n_points).reshape(-1, 1)
+                segment_traj = (1 - t_) * start_pt + t_ * end_pt
+
+                refs[current_step : current_step + n_points, :] = segment_traj
+                current_step += n_points
+
+            # --- 4. 组装坐标 ---
+            if self.idx == 1:  # Y-Z 平面
+                x = x_fixed * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)
+                z = refs[:, 1].reshape(-1, 1)
+            else:  # X-Y 平面
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = z_fixed * np.ones((num_steps, 1))
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Heart":
+            # 缩放系数 (心形方程生成的值较大，需要缩小)
+            scale = 0.01 * self.traj_scale
+            # 调整参数 t 使其覆盖 0 到 2pi (根据你的 t_param 范围可能需要调整)
+            # 假设 t_param 是线性增加的，我们取模或归一化来画完整的圆
+            t_circle = np.linspace(0, 2 * np.pi, len(t_param))
+            # 心形参数方程
+            # shape_x 对应水平宽，shape_y 对应垂直高（尖端在下，凹陷在上）
+            shape_x = 16 * np.sin(t_circle) ** 3
+            shape_y = 13 * np.cos(t_circle) - 5 * np.cos(2 * t_circle) - 2 * np.cos(3 * t_circle) - np.cos(4 * t_circle)
+            shape_x = shape_x * scale
+            shape_y = shape_y * scale
+
+            if self.idx == 1:  # Y-Z平面
+                center_y, center_z = 0.0, 0.2
+                x = 0.4 * np.ones((len(t_param), 1))
+                # 注意：心形方程 y 轴对应竖直方向，所以映射到 Z，x 轴映射到 Y
+                y = np.expand_dims(center_y + shape_x, axis=1)
+                z = np.expand_dims(center_z + shape_y, axis=1)
+            else:  # X-Y平面
+                center_x, center_y = 0.35, 0.0
+                z = 0.055 * np.ones((len(t_param), 1))
+                # 旋转90度让心形正对
+                x = np.expand_dims(center_x + shape_y, axis=1)  # 竖直方向映射到 X
+                y = np.expand_dims(center_y + shape_x, axis=1)  # 水平方向映射到 Y
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "FigStar":
+            # --- 1. 定义几何参数 ---
+            # 外部圆（五角星的五个尖角所在圆）的参数
+            a = 0.2 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
+            center_x, center_y, center_z, center_z_1 = 0.4, 0.0, 0.055, 0.2  # 统一中心点
+            # 定义五角星的半径和中心点
+            radius = a  # 外部半径（尖角到中心）
+            # 根据 self.idx 确定 2D 形状的中心偏移
+            if self.idx == 1:
+                # Y-Z 平面：形状中心是 (center_y, center_z)
+                center_prime_0 = center_y
+                center_prime_1 = center_z_1
+            else:
+                # X-Y 平面：形状中心是 (center_x, center_y)
+                center_prime_0 = center_x
+                center_prime_1 = center_y
+            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
+            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
+            Star_points_2D = np.zeros((11, 2))
+            for i in range(5):
+                # 尖角 (Outer Points)
+                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2)
+                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
+                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
+
+                # 凹陷点 (Inner Points)
+                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
+                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
+                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
+            # 闭合轨迹：第 11 个点 = 第 1 个点
+            Star_points_2D[-1, :] = Star_points_2D[0, :]
+            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
+            # 计算总时间步数
+            num_steps = len(t_param)  # 使用您的 t 或 self.time_vector
+            # 假设轨迹分段均匀 (10个线段)
+            num_segments = 10
+            refs = np.zeros((num_steps, 2))
+            # 计算每段轨迹包含的步数
+            each_num = num_steps // num_segments
+            current_step = 0
+            for i in range(num_segments):
+                start_point = Star_points_2D[i, :]
+                end_point = Star_points_2D[i + 1, :]
+                # 确保最后一段占满剩余所有步数
+                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
+                for j in range(num_interp_points):
+                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
+
+                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
+                current_step += num_interp_points
+            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
+            if self.idx == 1:
+                x = center_x * np.ones((num_steps, 1))
+                y = refs[:, 0].reshape(-1, 1)  # Y 对应 2D 坐标的第一个分量 (x')
+                z = refs[:, 1].reshape(-1, 1)  # Z 对应 2D 坐标的第二个分量 (y')
+            else:
+                x = refs[:, 0].reshape(-1, 1)
+                y = refs[:, 1].reshape(-1, 1)
+                z = center_z * np.ones((num_steps, 1))
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Helix":
+            radius = 0.1 * self.traj_scale
+            # 螺旋的长度
+            length = 0.2
+            # 生成圆周运动
+            # 这里的 t_param 直接用于周期，如果 t_param 范围大，螺旋圈数就多
+            circle_1 = radius * np.cos(t_param * 2)
+            circle_2 = radius * np.sin(t_param * 2)
+            # 生成轴向推进 (往返运动，使用 sin 避免跳变，或者线性)
+            # 这里使用线性往返：从 0 到 length 再回来
+            # 为了简单，这里演示单向推进然后瞬移，或者用 np.linspace
+            linear_move = np.linspace(-length / 2, length / 2, len(t_param))
+            center_x, center_y = 0.35, 0.0
+            center_z = 0.15
+            x = np.expand_dims(center_x + circle_1, axis=1)
+            y = np.expand_dims(center_y + circle_2, axis=1)
+            z = np.expand_dims(center_z + linear_move, axis=1)  # 高度变化
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        elif traj_name == "Lissajous":
+            A = 0.12 * self.traj_scale
+            B = 0.12 * self.traj_scale
+            # 频率参数 (3:2 的比例会生成一个经典的纽结形状)
+            a_freq = 3.0
+            b_freq = 2.0
+            delta = np.pi / 2  # 相位差
+
+            # 归一化时间参数以保证闭环
+            t_cycle = np.linspace(0, 2 * np.pi, len(t_param))
+
+            val_1 = A * np.sin(a_freq * t_cycle + delta)
+            val_2 = B * np.sin(b_freq * t_cycle)
+
+            if self.idx == 1:  # Y-Z平面
+                center_y, center_z = 0.0, 0.2
+                x = 0.4 * np.ones((len(t_param), 1))
+                y = np.expand_dims(center_y + val_1, axis=1)
+                z = np.expand_dims(center_z + val_2, axis=1)
+            else:  # X-Y平面
+                center_x, center_y = 0.35, 0.0
+                z = 0.055 * np.ones((len(t_param), 1))
+                x = np.expand_dims(center_x + val_2, axis=1)
+                y = np.expand_dims(center_y + val_1, axis=1)
+            xyz_coords = np.concatenate((x, y, z), axis=1)
+
+        else:
+            raise ValueError(f"未知的轨迹名称: {traj_name}")
+
+        # 2. 求解逆运动学
+        print("开始将笛卡尔轨迹转换为关节角度 (使用 Pinocchio+CasADi IK)...")
+        joint_angles_trajectory = []
+        target_tf = np.eye(4)
+        target_tf[:3, :3] = target_orientation_matrix
+
+        for i, pos in enumerate(xyz_coords):
+            # 更新目标变换矩阵的位置部分
+            target_tf[:3, 3] = pos
+
+            # 调用内部IK求解器
+            q_sol = self._solve_ik(target_tf)
+
+            if q_sol is not None:
+                joint_angles_trajectory.append(q_sol)
+            else:
+                print(f"警告: 逆运动学在时间步 {i} (目标位置: {np.round(pos, 3)}) 求解失败。")
+                if joint_angles_trajectory:
+                    # 使用上一个成功的结果来填充，保持轨迹连续性
+                    joint_angles_trajectory.append(joint_angles_trajectory[-1])
+                else:
+                    raise RuntimeError("轨迹的第一个点IK求解失败, 请检查目标位置和姿态。")
+
+        print("关节角度轨迹转换完成。")
+        return xyz_coords, np.array(joint_angles_trajectory), self.time_vector

@@ -3,13 +3,12 @@ import os
 import sys
 import time
 
-import casadi_ik  # 导入你的 pinocchio+casadi IK 模块
 import matplotlib.pyplot as plt
 import mujoco
-import mujoco.viewer
 import mujoco_viewer
 import numpy as np
 from so101_mujoco import ZMQCommunicator
+from TrajectoryGenerator import CartesianTrajectoryGenerator_Pinocchio
 
 # --- 修改后的主仿真类 ---
 joint_offsets = [
@@ -26,209 +25,6 @@ joint_offsets = [
 def sim_to_real(q_sim_deg, offsets):
     """MuJoCo 角度 (度) -> 真实机器人指令角度 (度)"""
     return [sim - off for sim, off in zip(q_sim_deg, offsets)]
-
-
-# --- 笛卡尔轨迹生成器 (融合 Pinocchio+CasADi IK) ---
-class CartesianTrajectoryGenerator:
-    """
-    生成笛卡尔空间轨迹，并使用 Pinocchio+CasADi 进行逆运动学求解，
-    最终输出关节角度轨迹。
-    """
-
-    def __init__(
-        self, arm_model_path: str, ee_site_name: str, num_joints: int, idx=1, time_horizon=60, time_steps_per_sec=5
-    ):
-        """
-        初始化轨迹生成器及内置的IK求解器。
-
-        Args:
-            arm_model_path (str): 用于IK的机械臂模型路径 (e.g., "so101_new_calib.xml")。
-            ee_site_name (str): 末端执行器在XML中的 <site> 名称。
-            num_joints (int): 机械臂的关节数量。
-            idx (int): 轨迹平面设置 (0 for x-y plane, 1 for y-z plane)。
-            time_horizon (float): 轨迹的总时长（秒）。
-            time_steps_per_sec (int): 每秒的轨迹点数量。
-        """
-        # 轨迹参数
-        self.idx = idx
-        self.time_horizon = time_horizon
-        self.time_steps_per_sec = time_steps_per_sec
-        self.total_steps = int(time_horizon * time_steps_per_sec)
-        self.time_vector = np.linspace(0, self.time_horizon, self.total_steps)
-        self.traj_scale = 0.5
-
-        # IK参数
-        self.arm_model_path = arm_model_path
-        self.ee_site_name = ee_site_name
-        self.num_joints = num_joints
-
-        # 初始化IK求解器
-        self._initialize_ik_solver()
-
-    def _initialize_ik_solver(self):
-        """加载模型并准备IK计算环境。"""
-        print("正在为IK求解器初始化 Pinocchio+CasADi 模型...")
-        try:
-            self.ik_solver = casadi_ik.Kinematics(self.ee_site_name)
-            self.ik_solver.buildFromMJCF(self.arm_model_path)
-            print("IK求解器初始化完成。")
-        except Exception as e:
-            print(f"错误：无法从'{self.arm_model_path}'初始化IK模型。 {e}")
-            sys.exit(1)
-
-    def _solve_ik(self, target_tf: np.ndarray) -> np.ndarray:
-        """
-        内部IK求解函数，使用 Pinocchio+CasADi。
-
-        Args:
-            target_tf (np.ndarray): 4x4的目标变换矩阵。
-
-        Returns:
-            np.ndarray: 求解出的关节角度（弧度），如果失败则返回 None。
-        """
-        q_sol, info = self.ik_solver.ik(target_tf)
-        if info["success"]:
-            return q_sol
-        else:
-            return None
-
-    def generate(self, traj_name="Fig8", target_orientation_matrix=np.eye(3)):
-        """
-        生成指定的笛卡尔轨迹并求解对应的关节角度轨迹。
-
-        Args:
-            traj_name (str): 轨迹名称 ('Fig8', 'Circle')。
-            target_orientation_matrix (np.ndarray): 3x3的旋转矩阵，定义末端执行器姿态。
-
-        Returns:
-            tuple: 包含三个元素的元组:
-                - np.ndarray: 形状为 (N, 3) 的笛卡尔坐标点云。
-                - np.ndarray: 形状为 (N, num_joints) 的关节角度轨迹（弧度）。
-                - np.ndarray: 对应的时间向量。
-        """
-        # 1. 生成笛卡尔坐标点 (x, y, z)
-        t_param = 1.6 + 0.02 * np.linspace(0, self.time_horizon * 5, len(self.time_vector))
-        print(f"正在生成 '{traj_name}' 笛卡尔轨迹...")
-
-        if traj_name == "Fig8":
-            if self.idx == 1:  # Y-Z平面
-                a = 0.2 * self.traj_scale
-                b = 0.2 * self.traj_scale
-                x = 0.4 * np.ones((len(t_param), 1))
-                z = np.expand_dims(0.2 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
-            else:  # X-Y平面
-                a = 0.25 * self.traj_scale
-                b = 0.25 * self.traj_scale
-                z = 0.055 * np.ones((len(t_param), 1))
-                x = np.expand_dims(
-                    0.35 + 2 * a * np.sin(t_param) * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1
-                )
-                y = np.expand_dims(b * np.cos(t_param) / (1 + np.sin(t_param) ** 2), axis=1)
-            xyz_coords = np.concatenate((x, y, z), axis=1)
-
-        elif traj_name == "Circle":
-            if self.idx == 1:  # Y-Z平面
-                radius = 0.1
-                x = 0.4 * np.ones((len(t_param), 1))
-                center_y, center_z = 0.0, 0.2
-                y = np.expand_dims(center_y + radius * np.cos(t_param), axis=1)
-                z = np.expand_dims(center_z + radius * np.sin(t_param), axis=1)
-            else:  # X-Y平面
-                radius = 0.1
-                z = 0.2 * np.ones((len(t_param), 1))
-                center_x, center_y = 0.3, 0.0
-                x = np.expand_dims(center_x + radius * np.cos(t_param), axis=1)
-                y = np.expand_dims(center_y + radius * np.sin(t_param), axis=1)
-            xyz_coords = np.concatenate((x, y, z), axis=1)
-        elif traj_name == "FigStar":
-            # --- 1. 定义几何参数 ---
-            # 外部圆（五角星的五个尖角所在圆）的参数
-            a = 0.22 * self.traj_scale  # 使用 a 来控制整体尺寸（外部半径）
-            center_x, center_y, center_z, center_z_1 = 0.35, 0.0, 0.055, 0.2  # 统一中心点
-            # 定义五角星的半径和中心点
-            radius = a  # 外部半径（尖角到中心）
-            # 根据 self.idx 确定 2D 形状的中心偏移
-            if self.idx == 1:
-                # Y-Z 平面：形状中心是 (center_y, center_z)
-                center_prime_0 = center_y
-                center_prime_1 = center_z_1
-            else:
-                # X-Y 平面：形状中心是 (center_x, center_y)
-                center_prime_0 = center_x
-                center_prime_1 = center_y
-            eradius = radius * np.sin(np.pi / 10.0) / np.sin(3 * np.pi / 10.0)
-            # --- 2. 计算 11 个关键点 (5个尖角 + 5个凹陷 + 1个闭合点) ---
-            Star_points_2D = np.zeros((11, 2))
-            for i in range(5):
-                # 尖角 (Outer Points)
-                theta_outer = (2 * np.pi / 5) * i + (np.pi / 2)
-                Star_points_2D[2 * i, 0] = np.cos(theta_outer) * radius + center_prime_0
-                Star_points_2D[2 * i, 1] = np.sin(theta_outer) * radius + center_prime_1
-
-                # 凹陷点 (Inner Points)
-                theta_inner = (2 * np.pi / 5) * i + (np.pi / 2) + (np.pi / 5)
-                Star_points_2D[2 * i + 1, 0] = np.cos(theta_inner) * eradius + center_prime_0
-                Star_points_2D[2 * i + 1, 1] = np.sin(theta_inner) * eradius + center_prime_1
-            # 闭合轨迹：第 11 个点 = 第 1 个点
-            Star_points_2D[-1, :] = Star_points_2D[0, :]
-            # --- 3. 轨迹插值（使用与您代码类似的线性插值方法） ---
-            # 计算总时间步数
-            num_steps = len(t_param)  # 使用您的 t 或 self.time_vector
-            # 假设轨迹分段均匀 (10个线段)
-            num_segments = 10
-            refs = np.zeros((num_steps, 2))
-            # 计算每段轨迹包含的步数
-            each_num = num_steps // num_segments
-            current_step = 0
-            for i in range(num_segments):
-                start_point = Star_points_2D[i, :]
-                end_point = Star_points_2D[i + 1, :]
-                # 确保最后一段占满剩余所有步数
-                num_interp_points = each_num if i < num_segments - 1 else num_steps - current_step
-                for j in range(num_interp_points):
-                    t_ = j / (num_interp_points - 1) if num_interp_points > 1 else 0.0
-
-                    refs[current_step + j, :] = t_ * end_point + (1 - t_) * start_point
-                current_step += num_interp_points
-            # --- 4. 组装 3D 坐标 (Y-Z平面，X固定) ---
-            if self.idx == 1:
-                x = center_x * np.ones((num_steps, 1))
-                y = refs[:, 0].reshape(-1, 1)  # Y 对应 2D 坐标的第一个分量 (x')
-                z = refs[:, 1].reshape(-1, 1)  # Z 对应 2D 坐标的第二个分量 (y')
-            else:
-                x = refs[:, 0].reshape(-1, 1)
-                y = refs[:, 1].reshape(-1, 1)
-                z = center_z * np.ones((num_steps, 1))
-            xyz_coords = np.concatenate((x, y, z), axis=1)
-        else:
-            raise ValueError(f"未知的轨迹名称: {traj_name}")
-
-        # 2. 求解逆运动学
-        print("开始将笛卡尔轨迹转换为关节角度 (使用 Pinocchio+CasADi IK)...")
-        joint_angles_trajectory = []
-        target_tf = np.eye(4)
-        target_tf[:3, :3] = target_orientation_matrix
-
-        for i, pos in enumerate(xyz_coords):
-            # 更新目标变换矩阵的位置部分
-            target_tf[:3, 3] = pos
-
-            # 调用内部IK求解器
-            q_sol = self._solve_ik(target_tf)
-
-            if q_sol is not None:
-                joint_angles_trajectory.append(q_sol)
-            else:
-                print(f"警告: 逆运动学在时间步 {i} (目标位置: {np.round(pos, 3)}) 求解失败。")
-                if joint_angles_trajectory:
-                    # 使用上一个成功的结果来填充，保持轨迹连续性
-                    joint_angles_trajectory.append(joint_angles_trajectory[-1])
-                else:
-                    raise RuntimeError("轨迹的第一个点IK求解失败, 请检查目标位置和姿态。")
-
-        print("关节角度轨迹转换完成。")
-        return xyz_coords, np.array(joint_angles_trajectory), self.time_vector
 
 
 class Test(mujoco_viewer.CustomViewer):
@@ -333,7 +129,7 @@ class Test(mujoco_viewer.CustomViewer):
         # 对于静止或慢速运动的机器人，它主要就是重力力矩
         step_start = time.time()
 
-        # self.data.qfrc_applied[:] =  self.data.qfrc_bias[:]
+        self.data.qfrc_applied[:] = self.data.qfrc_bias[:]
         # --- 2. 机器人运动控制 ---
         # 如果轨迹还没播完
         if self.traj_index < self.total_frames:
@@ -424,6 +220,11 @@ class Test(mujoco_viewer.CustomViewer):
         q_real_target_deg = sim_to_real(sim_joint_deg, joint_offsets)
         self.communicator.send_data(q_real_target_deg)
 
+        # 3. 进入忙等待循环：只要当前时间还没到 target_time，就一直循环发送
+        # while time.time() - step_start < 0.02:
+        #     # 再次发送相同的数据（起到 Keep-Alive 或高频刷新的作用）
+        #     self.communicator.send_data(q_real_target_deg)
+
         time_until_next_step = 0.02 - (time.time() - step_start)
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
@@ -441,6 +242,8 @@ if __name__ == "__main__":
     NUM_JOINTS = 5
     use_noise = False
     use_plot = False
+    idx = 0  # 0 or 1
+    traj_name = "Heart"  # Rectangle, Fig8, FigStar, Heart, Helix, Lissajous
     # --- 步骤 1: 初始化MuJoCo环境 ---
     try:
         model = mujoco.MjModel.from_xml_path(SCENE_XML_PATH)
@@ -450,17 +253,17 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # --- 步骤 2: 创建全功能轨迹生成器实例 ---
-    traj_generator = CartesianTrajectoryGenerator(
+    traj_generator = CartesianTrajectoryGenerator_Pinocchio(
         arm_model_path=ARM_XML_PATH,
         ee_site_name=EE_SITE_NAME,
         num_joints=NUM_JOINTS,
-        idx=0,
+        idx=idx,
         time_horizon=60,
         time_steps_per_sec=10,
     )
     # --- 步骤 3: 一行代码生成所有轨迹数据 ---
     # 角度（度）
-    angle_degrees = 0  # 0 90
+    angle_degrees = 90 if idx == 0 else 0  # 0 90
 
     # 转换为弧度
     angle_radians = math.radians(angle_degrees)
@@ -480,7 +283,7 @@ if __name__ == "__main__":
         target_orientation = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
     # 调用generate方法，它会完成笛卡尔轨迹生成和IK求解两项工作
     cartesian_points, joint_angle_traj, time_vec = traj_generator.generate(
-        traj_name="FigStar",  # Circle, Fig8, FigStar
+        traj_name=traj_name,
         target_orientation_matrix=target_orientation,
     )
     zmq_communicator = ZMQCommunicator("tcp://127.0.0.1:5555")

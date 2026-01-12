@@ -1,5 +1,5 @@
 [tool.ruff]
-line-length = 125  # 代码最大行宽 (这个保留在最外层，因为它同时也影响 formatter)
+line-length = 120  # 代码最大行宽 (这个保留在最外层，因为它同时也影响 formatter)
 
 [tool.ruff.lint]   # 【新增】专门用于 linter 的配置部分
 select = [         # 选择的规则移动到这里
