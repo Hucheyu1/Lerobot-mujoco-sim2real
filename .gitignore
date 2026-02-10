@@ -4,6 +4,7 @@ ckpt/
 test_chirp/
 test_random/
 test_sin/
-12_12/
-12_13/
-12_22/
+results/SOARM101/12_12/
+results/SOARM101/12_13/
+results/SOARM101/12_22/
+.github/

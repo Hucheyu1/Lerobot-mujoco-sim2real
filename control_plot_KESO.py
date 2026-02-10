@@ -37,7 +37,7 @@ if __name__ == "__main__":
     for scenario in scenario_list:
         results = configs.get_result(scenario)
         results_dict[scenario] = results.copy()
-    # configs.save_table(results_dict, save_Fig_path)
+    configs.save_table(results_dict, save_Fig_path)
     plot_error = True
     scenario = "noise_robustness"
     results = results_dict[scenario]
@@ -82,7 +82,7 @@ if scenario == "noise_robustness":
         ax_2d.set_xlabel("Y (m)", fontsize=14)
         if traj_name == "Fig8":
             ax_2d.set_ylabel("Z (m)", fontsize=14)
-        ax_2d.grid(True, alpha=0.3)
+        # ax_2d.grid(True, alpha=0.3)
         ax_2d.axis("equal")
         # === 关键修改：设置刻度字体大小 ===
         ax_2d.tick_params(axis="both", which="major", labelsize=12)
@@ -96,7 +96,7 @@ if scenario == "noise_robustness":
             else:
                 ax.set_title(f"{traj_name} - {axis_labels[dim]}", fontsize=14)
             ax.set_xlabel("Steps", fontsize=14)
-            ax.grid(True, alpha=0.3)
+            # ax.grid(True, alpha=0.3)
             # 只有每行的第一个图显示Y轴标签，节省空间
             if dim == 0:
                 ax.set_ylabel("Position (m)", fontsize=14)

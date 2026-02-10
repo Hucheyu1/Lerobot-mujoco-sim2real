@@ -358,7 +358,7 @@ class MPCController_KESO(MPCController):
             f"Stability Verification of ESO Error Dynamics\n(N={n_samples}, u in [{u_min}, {u_max}])", fontsize=16
         )
         plt.legend(fontsize=16)
-        plt.grid(True, alpha=0.3)
+        # plt.grid(True, alpha=0.3)
         plt.tick_params(axis="both", which="major", labelsize=16)
         # 自动保存或显示
         plt.savefig("eso_stability_check.png", dpi=300)
