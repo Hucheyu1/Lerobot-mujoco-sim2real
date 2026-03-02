@@ -80,9 +80,9 @@ python train.py --model IBKN --mode train
   python DBKN_KESO.py
 ```
 
-- **实验结果**: ![控制结果对比](control/FigResults/12_22/noise_robustness_3rows.png)
-![控制结果对比](control/FigResults/12_22/payload_robustness_3rows.png)
-![控制结果对比](control/FigResults/12_22/both_robustness_3rows.png)
+- **抗噪声实验结果**: ![控制结果对比](control/FigResults/12_22/noise_robustness_3rows.png)
+- **抗负载实验结果**: ![控制结果对比](control/FigResults/12_22/payload_robustness_3rows.png)
+- **抗噪+抗负载实验结果**: ![控制结果对比](control/FigResults/12_22/both_robustness_3rows.png)
 
 ## 🧪 Sim2Real 部署
 
