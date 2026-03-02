@@ -1,0 +1,12 @@
+casadi==3.7.2
+dm_control==1.0.23
+gymnasium==1.0.0
+lerobot==0.4.4
+matplotlib==3.7.5
+mujoco==3.2.3
+numpy==1.24.4
+pinocchio==0.4.3
+pyzmq==27.1.0
+rerun==1.0.30
+torch==2.4.1+cu121
+tqdm==4.67.1
