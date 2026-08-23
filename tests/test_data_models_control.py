@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from args import Args
-from control import JointTorquePDController
+from control import JointTorquePDController, KoopmanTorqueMPC
 from control.run_torque_control import run
 from models.init_model import init_model
 from models.losses import rollout_loss, rollout_prediction
@@ -47,6 +47,20 @@ def test_pd_controller_clips_residual_torque() -> None:
     controller = JointTorquePDController(limits)
     command = controller.command(np.zeros(12), np.ones(6) * 10.0)
     assert np.allclose(command, limits)
+
+
+def test_koopman_mpc_returns_bounded_physical_torque() -> None:
+    args = Args(["--model", "IBKN", "--smoke", "--device", "cpu"])
+    model = init_model(args)
+    rated = np.array([150.0, 150.0, 150.0, 28.0, 28.0, 28.0])
+    residual = rated * 0.05
+    controller = KoopmanTorqueMPC(model, rated, residual, horizon=3, iterations=2)
+    state = np.zeros(12)
+    reference = np.zeros((3, 12))
+    command = controller.command(state, reference)
+    assert command.shape == (6,)
+    assert np.all(np.isfinite(command))
+    assert np.all(np.abs(command) <= residual + 1e-6)
 
 
 def test_closed_loop_direct_torque_smoke(tmp_path) -> None:

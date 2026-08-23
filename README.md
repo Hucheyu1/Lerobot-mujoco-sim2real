@@ -23,6 +23,7 @@ assets/ur5e/                Menagerie 来源文件和直接 motor 派生 MJCF
 models/                     DKUC、DBKN、IKN、IBKN
 control/
   TorqueController.py       重力前馈之外的残差力矩 PD
+  KoopmanTorqueMPC.py       冻结学习模型的残差力矩滚动优化
   TrajectoryGenerator.py    安全关节参考轨迹
   run_torque_control.py     闭环力矩控制入口
 tests/                      环境、数据、模型和控制语义测试
@@ -46,6 +47,14 @@ python -m control.run_torque_control --steps 300
 ```
 
 结果保存到 `runs/ur5e_torque/control_demo.npz`，包含状态、参考、残差力矩、实际电机力矩和 RMSE。
+
+训练模型后运行 Koopman 预测控制：
+
+```powershell
+python -m control.run_koopman_mpc --model IBKN --checkpoint runs/ur5e_torque/IBKN/best_model.pt
+```
+
+MPC 在学习模型中对未来残差力矩序列做梯度优化，每次迭代后投影到物理力矩盒约束。当前实现用于保持旧项目的模型预测控制逻辑和验证接口，不宣称已经达到 50 Hz 实时性能。
 
 ## 数据与模型
 
