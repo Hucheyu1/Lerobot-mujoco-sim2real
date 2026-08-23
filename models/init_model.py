@@ -5,8 +5,8 @@ from .KoopmanBase import KoopmanBlinear, Koopmanlinear
 
 
 def init_model(args):
-    if args.x_dim != 12 or args.u_dim != 6:
-        raise ValueError("UR5e torque models require x_dim=12 and u_dim=6")
+    if args.x_dim != 15 or args.u_dim != 6:
+        raise ValueError("UR5e torque models require x_dim=15 ([ee,q,dq]) and u_dim=6")
     if args.model == "DKUC":
         return Koopmanlinear(args.x_dim, args.u_dim, args.layers, args.use_stable).to(args.device)
     if args.model == "DBKN":

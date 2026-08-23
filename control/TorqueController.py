@@ -34,8 +34,8 @@ class JointTorquePDController:
         state = np.asarray(state, dtype=np.float64)
         q_reference = np.asarray(q_reference, dtype=np.float64)
         dq_reference = np.zeros(6) if dq_reference is None else np.asarray(dq_reference, dtype=np.float64)
-        if state.shape != (12,) or q_reference.shape != (6,) or dq_reference.shape != (6,):
-            raise ValueError("Expected state (12,), q_reference (6,), dq_reference (6,)")
-        q, dq = state[:6], state[6:]
+        if state.shape != (15,) or q_reference.shape != (6,) or dq_reference.shape != (6,):
+            raise ValueError("Expected state (15,)=[ee,q,dq], q_reference (6,), dq_reference (6,)")
+        q, dq = state[3:9], state[9:15]
         torque = self.kp * (q_reference - q) + self.kd * (dq_reference - dq)
         return np.clip(torque, -self.torque_limits, self.torque_limits)

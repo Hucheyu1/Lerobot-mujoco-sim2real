@@ -5,7 +5,7 @@
 ## 控制语义
 
 - 机器人：MuJoCo Menagerie UR5e 简化动力学模型。
-- 状态：`x=[q,dq]∈R^12`，单位分别为 rad 和 rad/s。
+- 状态/网络输入：`x=[p_ee,q,dq]∈R^15`，其中末端笛卡尔坐标 3 维、关节角 6 维、关节速度 6 维，单位分别为 m、rad、rad/s。前三维布局与原 SOARM101 保持一致；保留 `dq` 是因为力矩控制系统需要速度才能构成 Markov 状态。
 - 模型输入：`u∈R^6`，表示物理单位为 N·m 的残差关节力矩。
 - 执行器：六个 MuJoCo `motor`，额定限制为 `[150,150,150,28,28,28]` N·m。
 - 实际执行：`tau_applied = clip(0.9*tau_gravity + u)`；残差、重力项和最终执行力矩分别记录。
@@ -23,7 +23,7 @@ assets/ur5e/                Menagerie 来源文件和直接 motor 派生 MJCF
 models/                     DKUC、DBKN、IKN、IBKN
 control/
   TorqueController.py       重力前馈之外的残差力矩 PD
-  KoopmanTorqueMPC.py       冻结学习模型的残差力矩滚动优化
+  MPC_Controler.py          基于 A/B/H/C 的 CasADi 残差力矩 MPC
   TrajectoryGenerator.py    安全关节参考轨迹
   run_torque_control.py     闭环力矩控制入口
 tests/                      环境、数据、模型和控制语义测试
@@ -54,7 +54,7 @@ python -m control.run_torque_control --steps 300
 python -m control.run_koopman_mpc --model IBKN --checkpoint runs/ur5e_torque/IBKN/best_model.pt
 ```
 
-MPC 在学习模型中对未来残差力矩序列做梯度优化，每次迭代后投影到物理力矩盒约束。当前实现用于保持旧项目的模型预测控制逻辑和验证接口，不宣称已经达到 50 Hz 实时性能。
+MPC 沿用原 SOARM101 控制器的矩阵逻辑：从网络读取 `A/B/H/C`，在当前升维状态处冻结双线性项得到 `B_total(z0)=B+sum(z0_j H_j)`，再由 CasADi/Ipopt 求解标准 MPC 或增量 MPC。若本机 CasADi 缺少 Ipopt 运行库，则自动用 SciPy/SLSQP 求解同一目标与约束。默认预测步长为 10，并在求解器内同时约束归一化残差力矩和力矩增量；输出再乘额定力矩恢复为 N·m。当前实现用于仿真验证，不宣称已达到 50 Hz 实时性能。
 
 ## 数据与模型
 
@@ -74,12 +74,12 @@ python train.py --model all --mode train --device cuda
 python train.py --model all --mode test --device cuda
 ```
 
-保存的 `.npy` 数据保持物理单位 `[u_Nm,q_rad,dq_rad_s]`；输入 DataLoader 后才按额定力矩归一化。动作 `u_t` 作用于状态 `x_t` 并产生 `x_{t+1}`，避免旧代码中目标速度和力矩语义混用。
+保存的 `.npy` 每行 21 维，保持物理单位 `[u_Nm(6),p_ee_m(3),q_rad(6),dq_rad_s(6)]`；输入 DataLoader 后只对动作按额定力矩归一化。动作 `u_t` 作用于状态 `x_t` 并产生 `x_{t+1}`。训练仍采用旧项目的多步开环形式，物理预测损失为 `L_ee + 4 L_q + L_dq`，并叠加 Koopman 潜空间一致性损失与原有稳定性正则项。
 
 ## 与旧仓库的差异
 
-1. 删除 SOARM101 的 5 维速度伺服环境和 `[EE位置,q]` 非 Markov 状态。
+1. 删除 SOARM101 的 5 维速度伺服环境，但保留其“末端位置优先”的状态布局、分区加权损失以及矩阵 MPC 架构。
 2. 删除 SOARM101 真机串口、ZMQ、位置命令回放及所有旧平台结果。
-3. 将数据状态统一为动力学状态 `[q,dq]`，动作统一为 6 维残差关节力矩。
+3. 将数据状态统一为 `[p_ee,q,dq]`，动作统一为 6 维残差关节力矩。
 4. 只保留论文核心模型 DKUC/DBKN/IKN/IBKN，删除未接入新链路的 KAN、LSTM 和 Koopformer 实验代码。
 5. 增加执行器类型、力矩限幅、重力补偿、数据时序和闭环控制测试。

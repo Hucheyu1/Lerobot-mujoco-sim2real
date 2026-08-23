@@ -24,7 +24,7 @@ def run(steps: int = 300, seed: int = 7, render: bool = False, output: Path | No
             residual = controller.command(state, q_ref, dq_ref)
             state, _, terminated, _, info = env.step(residual)
             states.append(state.copy())
-            references.append(np.concatenate((q_ref, dq_ref)))
+            references.append(env.reference_state(q_ref, dq_ref))
             residuals.append(info["residual_torque"])
             applied.append(info["applied_torque"])
             if terminated:
@@ -34,7 +34,7 @@ def run(steps: int = 300, seed: int = 7, render: bool = False, output: Path | No
 
     state_array = np.asarray(states)
     reference_array = np.asarray(references)
-    q_rmse = float(np.sqrt(np.mean((state_array[:, :6] - reference_array[:, :6]) ** 2)))
+    q_rmse = float(np.sqrt(np.mean((state_array[:, 3:9] - reference_array[:, 3:9]) ** 2)))
     metrics = {
         "q_rmse_rad": q_rmse,
         "max_residual_torque_nm": float(np.max(np.abs(residuals))),

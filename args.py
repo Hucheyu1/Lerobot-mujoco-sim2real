@@ -39,6 +39,9 @@ class Args:
         parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
         parser.add_argument("--use-stable", action="store_true")
         parser.add_argument("--u-z", action="store_true")
+        parser.add_argument("--MPC-type", choices=["delta_mpc", "mpc"], default="delta_mpc", dest="MPC_type")
+        parser.add_argument("--mpc-horizon", type=int, default=10)
+        parser.add_argument("--torque-rate-fraction", type=float, default=0.015)
         parser.add_argument("--smoke", action="store_true", help="use a tiny data/training configuration")
         self.args = parser.parse_args(argv)
         self._derive()
@@ -46,7 +49,7 @@ class Args:
     def _derive(self) -> None:
         project_root = Path(__file__).resolve().parent
         self.args.env = "UR5e"
-        self.args.x_dim = 12
+        self.args.x_dim = 15
         self.args.u_dim = 6
         self.args.xml_path = str(project_root / "assets" / "ur5e" / "scene_torque.xml")
         self.args.dataset_dir = str(project_root / "datasets" / "ur5e_torque")
@@ -66,7 +69,7 @@ class Args:
 
         if self.args.pre_length >= self.args.train_steps:
             raise ValueError("pre_length must be smaller than train_steps")
-        self.args.layers = [12, 64, 64, 32]
+        self.args.layers = [15, 64, 64, 32]
         self.args.x_blocks = [2, 2]
         self.args.x_channels = [12, 16]
         self.args.x_hiddens = [64, 128]

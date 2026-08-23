@@ -1,6 +1,8 @@
 """Gymnasium-style MuJoCo environment with direct UR5e joint torque control.
 
-The public state is ``x = [q, dq]`` (12 dimensions).  The public action is a
+The public state is ``x = [p_ee, q, dq]`` (15 dimensions), matching the
+end-effector-first layout of the original SOARM101 pipeline while retaining
+joint velocity for torque-dynamics Markov state.  The public action is a
 six-dimensional residual joint torque in N m.  It is added to an optional
 gravity feed-forward term and sent to six MuJoCo ``motor`` actuators.  No
 position or velocity servo is present in this control path.
@@ -93,7 +95,7 @@ class UR5eTorqueEnv(gym.Env):
         self.residual_limits = self.torque_limits * self.config.residual_torque_fraction
 
         self.action_space = spaces.Box(-self.residual_limits, self.residual_limits, dtype=np.float64)
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(12,), dtype=np.float64)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(15,), dtype=np.float64)
         self._viewer = None
         self.last_residual_torque = np.zeros(6)
         self.last_gravity_torque = np.zeros(6)
@@ -111,10 +113,26 @@ class UR5eTorqueEnv(gym.Env):
     def _get_state(self) -> np.ndarray:
         q = self.data.qpos[self.qpos_ids]
         dq = self.data.qvel[self.dof_ids]
-        return np.concatenate((q, dq)).astype(np.float64, copy=True)
+        ee = self.data.site_xpos[self.ee_site_id]
+        return np.concatenate((ee, q, dq)).astype(np.float64, copy=True)
 
     def end_effector_position(self) -> np.ndarray:
         return self.data.site_xpos[self.ee_site_id].astype(np.float64, copy=True)
+
+    def reference_state(self, q: np.ndarray, dq: np.ndarray | None = None) -> np.ndarray:
+        """Construct ``[p_ee,q,dq]`` for a joint reference without changing the plant."""
+
+        q = np.asarray(q, dtype=np.float64)
+        dq = np.zeros(6) if dq is None else np.asarray(dq, dtype=np.float64)
+        if q.shape != (6,) or dq.shape != (6,):
+            raise ValueError("q and dq must each have shape (6,)")
+        self._gravity_data.qpos[:] = 0.0
+        self._gravity_data.qvel[:] = 0.0
+        self._gravity_data.qpos[self.qpos_ids] = q
+        self._gravity_data.qvel[self.dof_ids] = dq
+        mujoco.mj_forward(self.model, self._gravity_data)
+        ee = self._gravity_data.site_xpos[self.ee_site_id].copy()
+        return np.concatenate((ee, q, dq))
 
     def gravity_torque(self) -> np.ndarray:
         """Return gravity-only generalized force at the current joint position."""
@@ -208,7 +226,7 @@ class UR5eTorqueEnv(gym.Env):
     def _unsafe(self, state: np.ndarray) -> bool:
         if not np.all(np.isfinite(state)):
             return True
-        q, dq = state[:6], state[6:]
+        q, dq = state[3:9], state[9:15]
         limited = self.model.jnt_limited[self.joint_ids].astype(bool)
         ranges = self.model.jnt_range[self.joint_ids]
         joint_violation = np.any(q[limited] < ranges[limited, 0]) or np.any(q[limited] > ranges[limited, 1])

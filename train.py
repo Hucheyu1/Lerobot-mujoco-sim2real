@@ -29,7 +29,7 @@ def set_seed(seed: int) -> None:
 @torch.no_grad()
 def evaluate(model, loader) -> dict[str, float]:
     model.eval()
-    values = {"rmse": [], "q_rmse": [], "dq_rmse": []}
+    values = {"rmse": [], "ee_rmse": [], "q_rmse": [], "dq_rmse": []}
     for batch in loader:
         result = rollout_prediction(batch, model)
         for key in values:

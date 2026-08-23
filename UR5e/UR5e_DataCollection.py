@@ -1,7 +1,7 @@
 """UR5e torque trajectory generation using the original project data layout.
 
 Each saved row is ``[u_t, x_t]`` where ``u_t`` is the six-dimensional residual
-joint torque in N m and ``x_t=[q_t,dq_t]``.  Applying row ``t``'s action produces
+joint torque in N m and ``x_t=[p_ee(t), q_t, dq_t]``.  Applying row ``t``'s action produces
 row ``t+1``'s state.  The loaders normalize action by the rated joint torques;
 the `.npy` files always retain physical units.
 """
@@ -145,8 +145,8 @@ class UR5eDataGenerator:
         manifest = {
             "robot": "UR5e",
             "control_mode": "direct_joint_torque",
-            "state": "[q,dq]",
-            "state_units": ["rad"] * 6 + ["rad/s"] * 6,
+            "state": "[ee_xyz,q,dq]",
+            "state_units": ["m"] * 3 + ["rad"] * 6 + ["rad/s"] * 6,
             "action": "residual_joint_torque",
             "action_units": ["N m"] * 6,
             "rated_torque_nm": self.env.torque_limits.tolist(),
