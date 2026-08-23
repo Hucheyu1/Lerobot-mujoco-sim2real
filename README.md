@@ -1,90 +1,76 @@
-# SO-ARM101 Koopman Sim2Real
+# UR5e Torque Koopman
 
-基于 Koopman 算子理论的 SO-ARM101 六自由度机械臂仿真到真机迁移 (Sim2Real) 项目，实现数据驱动的动力学建模、预测与 MPC 控制。
+这是从提交 `b34bba601887ee5424af942e65ac315972049873` 重新整理的 UR5e 分支。项目保留原来的“MuJoCo 环境 → 轨迹数据采集 → Koopman 模型训练/测试 → 闭环控制”逻辑，但已完全移除 SOARM101 模型、舵机/串口、ZMQ 真机桥接、旧权重、历史结果和视频。
 
-## ✨ 特性
+## 控制语义
 
-- 🤖 支持多种 Koopman 网络架构（DKUC、DBKN、IKN、IBKN、Koopformer、KANKoopman）
-- 🎮 基于 MuJoCo 的高保真物理仿真环境
-- 🎯 CasADi 实现的 MPC 控制器
-- 🔄 ZMQ 实现的 Sim2Real 实时通信
-- 📊 完整的训练、评估与可视化流程
+- 机器人：MuJoCo Menagerie UR5e 简化动力学模型。
+- 状态：`x=[q,dq]∈R^12`，单位分别为 rad 和 rad/s。
+- 模型输入：`u∈R^6`，表示物理单位为 N·m 的残差关节力矩。
+- 执行器：六个 MuJoCo `motor`，额定限制为 `[150,150,150,28,28,28]` N·m。
+- 实际执行：`tau_applied = clip(0.9*tau_gravity + u)`；残差、重力项和最终执行力矩分别记录。
+- 仿真频率：物理步长 0.002 s，每次控制执行 10 个物理步，即 50 Hz。
 
-## 📁 项目结构
+注意：这是 dynamics-enabled 的简化仿真模型，不是 Universal Robots 官方仿真器，也不是经硬件辨识验证的数字孪生。模型来源与许可证见 `assets/ur5e/PROVENANCE.md`。
 
-```
-├── SOARM101/                 # MuJoCo 仿真环境
-│   ├── SOARM101_Env.py       # Gymnasium 风格环境封装
-│   ├── SOARM101_DataCollection.py  # 数据采集脚本
-│   └── SO101/                # 机器人 URDF/XML 模型
-├── models/                   # Koopman 网络实现
-│   ├── base_model.py         # KoopmanNet 基类
-│   ├── KoopmanBase.py        # DKUC/DBKN 线性/双线性模型
-│   ├── InvertKoopman.py      # IKN/IBKN 可逆网络模型
-│   └── losses.py             # 损失函数定义
-├── control/                  # MPC 控制模块
-│   ├── MPC_Controler.py      # MPC 控制器实现
-│   ├── TrajectoryGenerator.py # 轨迹生成器
-│   └── config.py             # 实验配置管理
-├── lerobot_sim2real/         # Sim2Real 通信模块
-│   ├── so101_mujoco.py       # MuJoCo 端 ZMQ 发布者
-│   └── so101_real.py         # 真机端 ZMQ 订阅者
-├── args.py                   # 命令行参数配置
-└── train.py                  # 训练/测试入口
+## 目录
+
+```text
+UR5e/
+  UR5e_Env.py               6 维直接力矩 Gymnasium 环境
+  UR5e_DataCollection.py    物理单位轨迹采集和 DataLoader
+assets/ur5e/                Menagerie 来源文件和直接 motor 派生 MJCF
+models/                     DKUC、DBKN、IKN、IBKN
+control/
+  TorqueController.py       重力前馈之外的残差力矩 PD
+  TrajectoryGenerator.py    安全关节参考轨迹
+  run_torque_control.py     闭环力矩控制入口
+tests/                      环境、数据、模型和控制语义测试
+args.py                     UR5e 固定维度与运行参数
+train.py                    collect/train/test 统一入口
 ```
 
-## 🚀 快速开始
+## 安装与验证
 
-### 安装依赖
+推荐 Python 3.10：
 
-```bash
-pip install -r requirements.txt
+```powershell
+python -m pip install -r requirements.txt
+python -m pytest -q
 ```
 
-### 训练模型
+运行无训练的直接力矩闭环：
 
-```bash
-# 训练 DBKN 模型
-python train.py --model DBKN --mode train 
-
-# 训练可逆 Koopman 网络
-python train.py --model IBKN --mode train 
-
+```powershell
+python -m control.run_torque_control --steps 300
 ```
 
-## 🧪 主要实验
+结果保存到 `runs/ur5e_torque/control_demo.npz`，包含状态、参考、残差力矩、实际电机力矩和 RMSE。
 
-本项目重点验证了两种抗干扰控制架构：
+## 数据与模型
 
-### 1. IBKN + UKF (基于可逆 Koopman 的 UKF 状态估计)
+先做小规模端到端检查：
 
-结合 **可逆双线性 Koopman 网络 (IBKN)** 与 **无迹卡尔曼滤波 (UKF)**，解决模型不确定性与观测噪声问题。
-
-- **运行命令**:
-
-```bash
-  # 需手动进行对照实验 
-  python IBKN_UKF.py
+```powershell
+python train.py --mode collect --smoke --force-data
+python train.py --model IBKN --mode train --smoke
+python train.py --model IBKN --mode test --smoke
 ```
 
-- **实验结果**: ![控制结果对比](control/FigResults/12_11/noise_robustness.png)
+完整数据和四模型运行：
 
-### 2. DBKN + KESO (基于深度双线性 Koopman 的扩张状态观测器)
-
-利用 **深度双线性 Koopman (DBKN)** 结合 **Koopman 扩张状态观测器 (KESO)**，对未建模扰动进行实时估计与补偿。
-
-- **运行命令**:
-
-```bash
-  # 需手动进行对照实验
-  python DBKN_KESO.py
+```powershell
+python train.py --mode collect --force-data
+python train.py --model all --mode train --device cuda
+python train.py --model all --mode test --device cuda
 ```
 
-- **抗噪声实验结果**: ![控制结果对比](control/FigResults/12_22/noise_robustness_3rows.png)
-- **抗负载实验结果**: ![控制结果对比](control/FigResults/12_22/payload_robustness_3rows.png)
-- **抗噪+抗负载实验结果**: ![控制结果对比](control/FigResults/12_22/both_robustness_3rows.png)
+保存的 `.npy` 数据保持物理单位 `[u_Nm,q_rad,dq_rad_s]`；输入 DataLoader 后才按额定力矩归一化。动作 `u_t` 作用于状态 `x_t` 并产生 `x_{t+1}`，避免旧代码中目标速度和力矩语义混用。
 
-## 🧪 Sim2Real 部署
+## 与旧仓库的差异
 
-![实验一](control/media/Video1.gif)
-![实验二](control/media/Video2.gif)
+1. 删除 SOARM101 的 5 维速度伺服环境和 `[EE位置,q]` 非 Markov 状态。
+2. 删除 SOARM101 真机串口、ZMQ、位置命令回放及所有旧平台结果。
+3. 将数据状态统一为动力学状态 `[q,dq]`，动作统一为 6 维残差关节力矩。
+4. 只保留论文核心模型 DKUC/DBKN/IKN/IBKN，删除未接入新链路的 KAN、LSTM 和 Koopformer 实验代码。
+5. 增加执行器类型、力矩限幅、重力补偿、数据时序和闭环控制测试。

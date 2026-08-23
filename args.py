@@ -1,186 +1,79 @@
+"""Command-line configuration for the cleaned UR5e torque project."""
+
+from __future__ import annotations
+
 import argparse
-import os
+from pathlib import Path
 
 
 class Args:
-    def __init__(self):
-        # 初始化参数解析器
-        self.parser = argparse.ArgumentParser(description="Koopman 模型训练/测试参数配置")
-        self._add_args()  # 添加所有参数
-        self.args = self.parser.parse_args()  # 解析命令行参数
-        self.process_args()  # 动态处理路径等衍生参数
+    """Parse options while preserving the attribute-style API of the old code."""
 
-    def _add_args(self):
-        # 核心参数
-        self.parser.add_argument(
-            "--model",
-            type=str,
-            default="DBKN",
-            choices=[
-                "DKUC",
-                "DBKN",
-                "IKN",
-                "IBKN",
-                "Koopformer",
-                "all",
-                "KoopmanLSTMlinear",
-                "Koopformer",
-                "KANKoopman",
-            ],
-            help="模型类型,可选值: DKUC, DBKN, IKN, IBKN, all (默认: all)",
-        )
-        self.parser.add_argument(
-            "--mode",
-            type=str,
-            default="train",
-            choices=["train", "test"],
-            help="运行模式, 可选值: train / test (默认: train)",
-        )
-        self.parser.add_argument("--env", type=str, default="SOARM101", help="环境名称（用于路径生成）(默认: SOARM101)")
-        self.parser.add_argument("--suffix", type=str, default="12_22", help="实验后缀（用于路径区分）")
-        self.parser.add_argument("--seed", type=int, default=42, help="随机种子 (默认: 42)")
+    def __init__(self, argv: list[str] | None = None):
+        parser = argparse.ArgumentParser(description="UR5e torque Koopman training and evaluation")
+        parser.add_argument("--model", choices=["DKUC", "DBKN", "IKN", "IBKN", "all"], default="IBKN")
+        parser.add_argument("--mode", choices=["collect", "train", "test"], default="train")
+        parser.add_argument("--seed", type=int, default=42)
+        parser.add_argument("--force-data", action="store_true", help="regenerate existing trajectory arrays")
 
-        # 数据收集参数
-        self.parser.add_argument("--train_samples", type=int, default=50000, help="训练数据样本数 (默认: 50000)")
-        self.parser.add_argument("--train_steps", type=int, default=20, help="每个训练样本的时间步长 (默认: 16)")
-        self.parser.add_argument("--test_samples", type=int, default=2000, help="测试数据样本数 (默认: 2000)")
-        self.parser.add_argument("--test_steps", type=int, default=200, help="每个测试样本的时间步长 (默认: 200)")
-        self.parser.add_argument(
-            "--test_type",
-            type=str,
-            default="all",
-            choices=["sin", "random", "chirp", "all"],
-            help="测试数据类型, 可选值: sin / random / chirp / all (默认: all)",
-        )
-        # 预测参数
-        self.parser.add_argument("--pre_length", type=int, default=10, help="预测长度 (默认: 5)")
+        parser.add_argument("--train-samples", type=int, default=512)
+        parser.add_argument("--train-steps", type=int, default=100)
+        parser.add_argument("--val-samples", type=int, default=96)
+        parser.add_argument("--test-samples", type=int, default=96)
+        parser.add_argument("--test-steps", type=int, default=100)
+        parser.add_argument("--test-type", choices=["random", "sin", "chirp", "all"], default="all")
 
-        # 网络设计参数
-        self.parser.add_argument(
-            "--u_z", action="store_true", default=False, help="是否使用u-z关联(Koopman线性/双线性网络）(默认: False)"
-        )
-        self.parser.add_argument(
-            "--is_load", action="store_true", default=False, help="是否加载预训练模型 (默认: False)"
-        )
-        self.parser.add_argument("--x_dim", type=int, default=8, help="状态维度 (默认: 8)")
-        self.parser.add_argument("--u_dim", type=int, default=5, help="控制输入维度 (默认: 5)")
+        parser.add_argument("--physics-timestep", type=float, default=0.002)
+        parser.add_argument("--frame-skip", type=int, default=10)
+        parser.add_argument("--residual-torque-fraction", type=float, default=0.05)
+        parser.add_argument("--gravity-compensation-scale", type=float, default=0.90)
 
-        # 训练参数
-        self.parser.add_argument("--lr", type=float, default=1e-3, help="学习率 (默认: 1e-3)")
-        self.parser.add_argument("--num_epochs", type=int, default=500, help="训练轮数 (默认: 300)")
-        self.parser.add_argument("--batch_size", type=int, default=256, help="训练批次大小 (默认: 128)")
-        self.parser.add_argument("--eval_batch_size", type=int, default=256, help="评估批次大小 (默认: 128)")
-        self.parser.add_argument(
-            "--log_interval", type=int, default=100, help="日志打印间隔（单位：迭代次数）(默认: 100)"
-        )
-        self.parser.add_argument("--eval_interval", type=int, default=10, help="评估间隔(单位: epoch) (默认: 10)")
-        self.parser.add_argument(
-            "--loss_name",
-            type=str,
-            default="mse",
-            choices=["weighted_mse", "mse", "nmse"],
-            help="损失函数类型,可选值:weighted_mse / mse / nmse (默认: mse)",
-        )
-        self.parser.add_argument("--gamma", type=float, default=0.8, help="加权损失系数 (默认: 0.8)")
-        self.parser.add_argument(
-            "--device",
-            type=str,
-            default="cuda",
-            choices=["cpu", "cuda"],
-            help="计算设备, 可选值: cpu / cuda (默认: cuda)",
-        )
+        parser.add_argument("--lr", type=float, default=5e-4)
+        parser.add_argument("--num-epochs", type=int, default=140)
+        parser.add_argument("--batch-size", type=int, default=128)
+        parser.add_argument("--eval-batch-size", type=int, default=128)
+        parser.add_argument("--eval-interval", type=int, default=5)
+        parser.add_argument("--pre-length", type=int, default=25)
+        parser.add_argument("--loss-name", choices=["mse", "mae", "nmse"], default="mse")
+        parser.add_argument("--gamma", type=float, default=0.98)
+        parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
+        parser.add_argument("--use-stable", action="store_true")
+        parser.add_argument("--u-z", action="store_true")
+        parser.add_argument("--smoke", action="store_true", help="use a tiny data/training configuration")
+        self.args = parser.parse_args(argv)
+        self._derive()
 
-        # 控制实验参数
-        self.parser.add_argument(
-            "--MPC_type",
-            type=str,
-            default="delta_mpc",
-            choices=["delta_mpc", "mpc"],
-            help="MPC类型,可选值: delta_mpc / mpc (默认: mpc)",
-        )
-        self.parser.add_argument(
-            "--traj_name",
-            type=str,
-            default="Fig8",
-            choices=["FigStar", "Fig8", "love"],
-            help="轨迹形状, 可选值: FigStar / Fig8 / love",
-        )
-        self.parser.add_argument("--UKF", action="store_true", default=False, help="是否使用无迹卡尔曼滤波")
-        self.parser.add_argument("--noise", action="store_true", default=False, help="是否添加噪声")
-        self.parser.add_argument("--render", action="store_true", default=True, help="是否渲染")
+    def _derive(self) -> None:
+        project_root = Path(__file__).resolve().parent
+        self.args.env = "UR5e"
+        self.args.x_dim = 12
+        self.args.u_dim = 6
+        self.args.xml_path = str(project_root / "assets" / "ur5e" / "scene_torque.xml")
+        self.args.dataset_dir = str(project_root / "datasets" / "ur5e_torque")
+        self.args.output_root = str(project_root / "runs" / "ur5e_torque")
+        self.args.output_dir = str(Path(self.args.output_root) / self.args.model)
 
-        self.parser.add_argument("--use_stable", type=bool, default=False, help="是否使用稳定Koopman")
-        self.parser.add_argument("--use_decoder", type=bool, default=False, help="是否训练解码器")
+        if self.args.smoke:
+            self.args.train_samples = 8
+            self.args.val_samples = 4
+            self.args.test_samples = 4
+            self.args.train_steps = 12
+            self.args.test_steps = 12
+            self.args.num_epochs = 2
+            self.args.pre_length = 4
+            self.args.batch_size = 4
+            self.args.eval_batch_size = 4
 
-    def process_args(self):
-        project_root = os.path.abspath(".")
-        """动态处理衍生参数（和原 Tap 类的 process_args 功能一致）"""
-        self.args.xml_path = os.path.join(project_root, self.args.env, "SO101", "scene_with_table_v.xml")
-        self.args.arm_xml_path = os.path.join(project_root, self.args.env, "SO101", "so101_new_calib_v.xml")
-        # 动态生成输出目录
-        self.args.output_dir = os.path.join(project_root, "results", self.args.env, self.args.suffix, self.args.model)
-
-        # 动态生成数据目录
-        self.args.data_dir_save = os.path.join(project_root, self.args.env, "data")
-        self.args.data_dir_load_train = os.path.join(
-            project_root, self.args.env, "data", f"train_data_{self.args.train_samples}_{self.args.train_steps}.npy"
-        )
-        self.args.data_dir_load_test = os.path.join(
-            project_root,
-            self.args.env,
-            "data",
-            f"test_data_{self.args.test_type}_{self.args.test_samples}_{self.args.test_steps}.npy",
-        )
-        self.args.data_dir_load_val = os.path.join(
-            project_root, self.args.env, "data", f"val_data_{self.args.test_samples}_{self.args.test_steps}.npy"
-        )
-
-        # 网络层维度配置
-        self.args.layers = [self.args.x_dim, 64, 64, 64, 24]  # 调整输出维度以适应SOARM101
-        """Koopman线性/双线性网络的全连接层维度（输入维度=x_dim)"""
-
-        # 可逆网络参数
+        if self.args.pre_length >= self.args.train_steps:
+            raise ValueError("pre_length must be smaller than train_steps")
+        self.args.layers = [12, 64, 64, 32]
         self.args.x_blocks = [2, 2]
-        """可逆网络x分支的块数"""
         self.args.x_channels = [12, 16]
-        """可逆网络x分支的通道数"""
         self.args.x_hiddens = [64, 128]
-        """可逆网络x分支的隐藏层维度"""
-        self.args.u_blocks = [2, 2]
-        """可逆网络u分支的块数"""
-        self.args.u_channels = [10, 16]
-        """可逆网络u分支的通道数"""
-        self.args.u_hiddens = [32, 64]
-        """可逆网络u分支的隐藏层维度"""
+        # Retained for constructor compatibility; torque is passed directly.
+        self.args.u_blocks = [1]
+        self.args.u_channels = [6]
+        self.args.u_hiddens = [32]
 
-        # transform网络参数
-        self.args.seq_len = 12
-        self.args.patch_len = 4
-        self.args.d_model = 16
-        # KAN网络
-        self.args.kan_layers = [self.args.x_dim, 32, 16]
-        self.args.kan_params = None
-        # LSTM网络
-        self.args.lstm_seq_len = 6
-        self.args.LSTM_Hidden = 64
-        self.args.LSTM_encode_layers = [self.args.LSTM_Hidden, 64, 64, 24]
-
-    def __getattr__(self, name):
-        """方便直接通过 Args 实例访问参数（如 args.model 而非 args.args.model)"""
+    def __getattr__(self, name: str):
         return getattr(self.args, name)
-
-
-# 使用示例（和原代码完全兼容）
-if __name__ == "__main__":
-    # 解析命令行参数（用法和原 Tap 完全一致）
-    args = Args()
-    # 打印解析后的参数（验证效果）
-    print("=" * 50)
-    print("运行参数汇总：")
-    print(f"模型: {args.model}")
-    print(f"模式: {args.mode}")
-    print(f"输出目录: {args.output_dir}")
-    print(f"训练数据路径: {args.data_dir_load_train}")
-    print(f"学习率: {args.lr}")
-    print(f"设备: {args.device}")
-    print("=" * 50)

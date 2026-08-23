@@ -1,9 +1,18 @@
 __pycache__/
-data/
-ckpt/
-test_chirp/
-test_random/
-test_sin/
-results/SOARM101/12_12/
-results/SOARM101/12_13/
-.github/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+datasets/
+runs/
+*.egg-info/
+
+# Files that belong to the paper-experiment branch, not this clean platform branch.
+artifacts/
+data_pipeline/
+envs/
+estimation/
+experiments/
+scripts/
+tmp/
+论文返修/

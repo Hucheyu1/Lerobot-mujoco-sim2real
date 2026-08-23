@@ -1,25 +1,23 @@
+[project]
+name = "ur5e-torque-koopman"
+version = "0.1.0"
+description = "Direct-torque UR5e Koopman modeling and control"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.ruff]
-line-length = 120  # 代码最大行宽 (这个保留在最外层，因为它同时也影响 formatter)
+line-length = 120
+target-version = "py310"
 
-[tool.ruff.lint]   # 【新增】专门用于 linter 的配置部分
-select = [         # 选择的规则移动到这里
-    "F",
-    "E",
-    "W",
-    "UP",
-    "I",
-]
-ignore = ["E402", "F841", "E501"]  # 忽略的规则也移动到这里
-# F401 代表“导入了但未使用的包”。因为你忽略了它，当你保存时，Ruff 不会帮你自动删除没用的 import。你的代码里会留着灰色的无用引用。
-# F841 定义了但没用的变量（如 x = 1 然后后面没用 x），Ruff 既不会报错，也不会帮你删。
-# E402 如果你把 import 语句写在了代码中间（而不是文件最开头），Ruff 不会管你，也不会帮你挪上去
-# E501 是行长度超出限制的警告，因为你已经在最外层定义了 line-length，所以这里可以忽略
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
 
-# 4. 针对特定文件的忽略规则 (非常重要)
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]     # 在 __init__.py 中允许“导入但未使用”(用于暴露接口)
+"__init__.py" = ["F401"]
 
 [tool.ruff.format]
 quote-style = "double"
 docstring-code-format = true
-# 这里可以显式写出你的偏好，不写就用默认值
