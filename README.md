@@ -48,6 +48,7 @@ python -c "import torch, mujoco, casadi; print('torch:', torch.__version__); pri
 ### 2. 运行代码回归测试
 
 ```powershell
+New-Item -ItemType Directory -Force -Path runs | Out-Null
 python -m pytest -q -p no:cacheprovider --basetemp runs/pytest_tmp
 ```
 
@@ -68,10 +69,10 @@ python -m control.run_koopman_mpc --model IBKN --checkpoint runs/ur5e_torque/IBK
 
 ### 4. 采集正式训练、验证和测试数据
 
-下面显式写出当前正式默认配置，便于复现实验：训练集 512 条、验证集 96 条、每类测试集 96 条；每条轨迹包含 100 次状态转移。测试集分别使用 random、sin 和 chirp 力矩信号。
+正式默认配置与原 SOARM101 数据布局对齐：训练集 50,000 条短轨迹，每条 20 次状态转移；验证集 2,000 条、每类测试集 2,000 条，每条 200 次状态转移。训练集共包含 1,000,000 次状态转移，强调独立初始状态覆盖；测试集分别使用 random、sin 和 chirp 力矩信号进行较长时域评估。
 
 ```powershell
-python train.py --mode collect --seed 42 --train-samples 512 --train-steps 100 --val-samples 96 --test-samples 96 --test-steps 100 --force-data
+python train.py --mode collect --seed 42 --train-samples 50000 --train-steps 20 --val-samples 2000 --test-samples 2000 --test-steps 200 --force-data
 ```
 
 生成文件：
@@ -98,7 +99,7 @@ Get-Content datasets/ur5e_torque/manifest.json
 四种模型使用同一数据、训练轮数、学习率、batch size、多步预测长度和随机种子：
 
 ```powershell
-python train.py --model all --mode train --seed 42 --device cuda --num-epochs 140 --lr 0.0005 --batch-size 128 --eval-batch-size 128 --pre-length 25 --gamma 0.98 --loss-name mse
+python train.py --model all --mode train --seed 42 --device cuda --num-epochs 500 --lr 0.0005 --batch-size 256 --eval-batch-size 256 --pre-length 10 --gamma 0.98 --loss-name mse
 ```
 
 也可以单独训练某一个模型：
@@ -204,10 +205,10 @@ python -c "import numpy as np; d=np.load('runs/ur5e_torque/IBKN/mpc_delta.npz', 
 ```powershell
 $seeds = 42,43,44,45,46
 foreach ($seed in $seeds) {
-    python train.py --mode collect --seed $seed --train-samples 512 --train-steps 100 --val-samples 96 --test-samples 96 --test-steps 100 --force-data
+    python train.py --mode collect --seed $seed --train-samples 50000 --train-steps 20 --val-samples 2000 --test-samples 2000 --test-steps 200 --force-data
     if ($LASTEXITCODE -ne 0) { throw "seed $seed collection failed" }
 
-    python train.py --model all --mode train --seed $seed --device cuda --num-epochs 140 --pre-length 25
+    python train.py --model all --mode train --seed $seed --device cuda --num-epochs 500 --batch-size 256 --eval-batch-size 256 --pre-length 10
     if ($LASTEXITCODE -ne 0) { throw "seed $seed training failed" }
 
     python train.py --model all --mode test --seed $seed --device cuda --test-type all

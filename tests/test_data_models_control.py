@@ -11,6 +11,20 @@ from models.losses import _physical_losses, rollout_loss, rollout_prediction
 from UR5e.UR5e_DataCollection import UR5eDataGenerator
 
 
+def test_formal_defaults_match_soarm_experiment_layout() -> None:
+    args = Args(["--device", "cpu"])
+    assert args.train_samples == 50_000
+    assert args.train_steps == 20
+    assert args.val_samples == 2_000
+    assert args.test_samples == 2_000
+    assert args.test_steps == 200
+    assert args.pre_length == 10
+    assert args.num_epochs == 500
+    assert args.batch_size == args.eval_batch_size == 256
+    assert args.physics_timestep * args.frame_skip == 0.02
+    assert args.mpc_horizon == 10
+
+
 def test_data_layout_and_action_normalization(tmp_path) -> None:
     args = Args(["--mode", "collect", "--smoke", "--device", "cpu"])
     args.args.dataset_dir = str(tmp_path)

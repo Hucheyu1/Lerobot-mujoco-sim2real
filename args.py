@@ -16,11 +16,13 @@ class Args:
         parser.add_argument("--seed", type=int, default=42)
         parser.add_argument("--force-data", action="store_true", help="regenerate existing trajectory arrays")
 
-        parser.add_argument("--train-samples", type=int, default=512)
-        parser.add_argument("--train-steps", type=int, default=100)
-        parser.add_argument("--val-samples", type=int, default=96)
-        parser.add_argument("--test-samples", type=int, default=96)
-        parser.add_argument("--test-steps", type=int, default=100)
+        # Preserve the SOARM101 experiment layout: many short random training
+        # trajectories and fewer, longer validation/test trajectories.
+        parser.add_argument("--train-samples", type=int, default=50_000)
+        parser.add_argument("--train-steps", type=int, default=20)
+        parser.add_argument("--val-samples", type=int, default=2_000)
+        parser.add_argument("--test-samples", type=int, default=2_000)
+        parser.add_argument("--test-steps", type=int, default=200)
         parser.add_argument("--test-type", choices=["random", "sin", "chirp", "all"], default="all")
 
         parser.add_argument("--physics-timestep", type=float, default=0.002)
@@ -29,11 +31,11 @@ class Args:
         parser.add_argument("--gravity-compensation-scale", type=float, default=0.90)
 
         parser.add_argument("--lr", type=float, default=5e-4)
-        parser.add_argument("--num-epochs", type=int, default=140)
-        parser.add_argument("--batch-size", type=int, default=128)
-        parser.add_argument("--eval-batch-size", type=int, default=128)
+        parser.add_argument("--num-epochs", type=int, default=500)
+        parser.add_argument("--batch-size", type=int, default=256)
+        parser.add_argument("--eval-batch-size", type=int, default=256)
         parser.add_argument("--eval-interval", type=int, default=5)
-        parser.add_argument("--pre-length", type=int, default=25)
+        parser.add_argument("--pre-length", type=int, default=10)
         parser.add_argument("--loss-name", choices=["mse", "mae", "nmse"], default="mse")
         parser.add_argument("--gamma", type=float, default=0.98)
         parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
