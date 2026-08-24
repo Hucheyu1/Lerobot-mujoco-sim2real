@@ -246,6 +246,20 @@ class UR5eTorqueEnv(gym.Env):
         mujoco.mj_fullM(self.model, dense, self.data.qM)
         return dense[np.ix_(self.dof_ids, self.dof_ids)]
 
+    def inverse_dynamics_torque(self, desired_acceleration: np.ndarray) -> np.ndarray:
+        """Return motor torque for a desired acceleration at the current state.
+
+        MuJoCo uses ``M qacc + bias = passive + applied``.  The direct motor
+        torque therefore equals ``M qacc + bias - passive`` for these joints.
+        """
+
+        desired = np.asarray(desired_acceleration, dtype=np.float64)
+        if desired.shape != (6,) or not np.all(np.isfinite(desired)):
+            raise ValueError("desired_acceleration must be finite with shape (6,)")
+        bias = self.data.qfrc_bias[self.dof_ids]
+        passive = self.data.qfrc_passive[self.dof_ids]
+        return self.mass_matrix() @ desired + bias - passive
+
     def render(self) -> None:
         if self.render_mode != "human":
             return

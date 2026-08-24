@@ -66,3 +66,21 @@ def test_residual_torque_is_clipped_in_physical_units() -> None:
         assert np.all(np.linalg.eigvalsh(env.mass_matrix()) > 0.0)
     finally:
         env.close()
+
+
+def test_inverse_dynamics_torque_is_finite_and_matches_mujoco_equation() -> None:
+    env = UR5eTorqueEnv()
+    try:
+        env.reset(seed=17)
+        desired_acceleration = np.linspace(-0.5, 0.5, 6)
+        torque = env.inverse_dynamics_torque(desired_acceleration)
+        expected = (
+            env.mass_matrix() @ desired_acceleration
+            + env.data.qfrc_bias[env.dof_ids]
+            - env.data.qfrc_passive[env.dof_ids]
+        )
+        assert torque.shape == (6,)
+        assert np.all(np.isfinite(torque))
+        assert np.allclose(torque, expected)
+    finally:
+        env.close()

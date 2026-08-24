@@ -29,6 +29,20 @@ class Args:
         parser.add_argument("--frame-skip", type=int, default=10)
         parser.add_argument("--residual-torque-fraction", type=float, default=0.05)
         parser.add_argument("--gravity-compensation-scale", type=float, default=0.90)
+        parser.add_argument("--initial-position-span", type=float, default=0.50)
+        parser.add_argument("--initial-velocity-span", type=float, default=0.05)
+        parser.add_argument("--waypoint-count", type=int, default=10)
+        parser.add_argument("--waypoint-velocity-limit", type=float, default=0.07)
+        parser.add_argument("--tracking-kp", type=float, default=16.0)
+        parser.add_argument("--tracking-kd", type=float, default=8.0)
+        parser.add_argument("--tracking-acceleration-limit", type=float, default=2.0)
+        parser.add_argument(
+            "--excitation-fraction",
+            type=float,
+            default=0.20,
+            help="maximum excitation as a fraction of each residual-torque limit",
+        )
+        parser.add_argument("--random-hold-steps", type=int, default=1)
 
         parser.add_argument("--lr", type=float, default=5e-4)
         parser.add_argument("--num-epochs", type=int, default=500)
@@ -71,6 +85,18 @@ class Args:
 
         if self.args.pre_length >= self.args.train_steps:
             raise ValueError("pre_length must be smaller than train_steps")
+        if self.args.initial_position_span < 0.0 or self.args.initial_velocity_span < 0.0:
+            raise ValueError("initial state spans must be non-negative")
+        if self.args.waypoint_count < 2 or self.args.waypoint_velocity_limit <= 0.0:
+            raise ValueError("waypoint_count must be >=2 and waypoint_velocity_limit must be positive")
+        if self.args.tracking_kp < 0.0 or self.args.tracking_kd < 0.0:
+            raise ValueError("tracking gains must be non-negative")
+        if self.args.tracking_acceleration_limit <= 0.0:
+            raise ValueError("tracking_acceleration_limit must be positive")
+        if not 0.0 <= self.args.excitation_fraction <= 1.0:
+            raise ValueError("excitation_fraction must lie in [0,1]")
+        if self.args.random_hold_steps < 1:
+            raise ValueError("random_hold_steps must be positive")
         self.args.layers = [15, 64, 64, 32]
         self.args.x_blocks = [2, 2]
         self.args.x_channels = [12, 16]

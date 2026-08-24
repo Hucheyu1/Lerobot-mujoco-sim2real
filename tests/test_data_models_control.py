@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import numpy as np
 import torch
+import pytest
 
 from args import Args
 from control import JointTorquePDController, MPCController
@@ -23,6 +25,15 @@ def test_formal_defaults_match_soarm_experiment_layout() -> None:
     assert args.batch_size == args.eval_batch_size == 256
     assert args.physics_timestep * args.frame_skip == 0.02
     assert args.mpc_horizon == 10
+    assert args.initial_position_span == 0.50
+    assert args.initial_velocity_span == 0.05
+    assert args.waypoint_count == 10
+    assert args.waypoint_velocity_limit == 0.07
+    assert args.tracking_kp == 16.0
+    assert args.tracking_kd == 8.0
+    assert args.tracking_acceleration_limit == 2.0
+    assert args.excitation_fraction == 0.20
+    assert args.random_hold_steps == 1
 
 
 def test_data_layout_and_action_normalization(tmp_path) -> None:
@@ -41,6 +52,36 @@ def test_data_layout_and_action_normalization(tmp_path) -> None:
         assert batch["x"].shape[-1] == 15
         assert batch["u"].shape[-1] == 6
         assert torch.max(torch.abs(batch["u"])) <= args.residual_torque_fraction + 1e-6
+        manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["status"] == "complete"
+        assert manifest["collection"]["dataset_version"] == "ur5e_computed_torque_v1"
+        assert manifest["collection"]["collection_mode"] == "computed_torque_waypoints_with_excitation"
+        assert manifest["split_statistics"]["train"]["acceptance_rate"] == 1.0
+    finally:
+        generator.close()
+
+
+def test_old_unversioned_arrays_are_not_silently_reused(tmp_path) -> None:
+    args = Args(["--mode", "collect", "--smoke", "--device", "cpu"])
+    args.args.dataset_dir = str(tmp_path)
+    np.save(tmp_path / "train.npy", np.zeros((1, 2, 21), dtype=np.float32))
+    generator = UR5eDataGenerator(args)
+    try:
+        with pytest.raises(RuntimeError, match="--force-data"):
+            generator.generate_and_save_data(force=False)
+    finally:
+        generator.close()
+
+
+def test_closed_loop_collector_keeps_long_trajectories_safe() -> None:
+    args = Args(["--mode", "collect", "--smoke", "--device", "cpu"])
+    generator = UR5eDataGenerator(args)
+    try:
+        data = generator.generate_trajectories(3, 200, "random", seed=1234)
+        assert data.shape == (3, 201, 21)
+        assert generator.last_generation_stats["acceptance_rate"] == 1.0
+        assert generator.last_generation_stats["saturation_rate"] < 0.05
+        assert np.max(np.abs(data[:, :, 15:21])) < generator.env.config.velocity_limit
     finally:
         generator.close()
 

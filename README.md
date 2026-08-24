@@ -18,7 +18,7 @@
 ```text
 UR5e/
   UR5e_Env.py               6 维直接力矩 Gymnasium 环境
-  UR5e_DataCollection.py    物理单位轨迹采集和 DataLoader
+  UR5e_DataCollection.py    闭环计算力矩轨迹采集和 DataLoader
 assets/ur5e/                Menagerie 来源文件和直接 motor 派生 MJCF
 models/                     DKUC、DBKN、IKN、IBKN
 control/
@@ -52,7 +52,7 @@ New-Item -ItemType Directory -Force -Path runs | Out-Null
 python -m pytest -q -p no:cacheprovider --basetemp runs/pytest_tmp
 ```
 
-测试覆盖环境状态顺序、末端坐标、21 维数据布局、四种网络、损失权重、双线性矩阵展开、PD 和标准/增量 MPC 力矩约束。测试必须全部通过后才能开始正式数据采集。
+测试覆盖环境状态顺序、末端坐标、逆动力学、21 维数据布局、旧数据版本隔离、长轨迹安全性、四种网络、损失权重、双线性矩阵展开、PD 和标准/增量 MPC 力矩约束。测试必须全部通过后才能开始正式数据采集。
 
 ### 3. 冒烟实验：先验证完整链路
 
@@ -69,11 +69,29 @@ python -m control.run_koopman_mpc --model IBKN --checkpoint runs/ur5e_torque/IBK
 
 ### 4. 采集正式训练、验证和测试数据
 
-正式默认配置与原 SOARM101 数据布局对齐：训练集 50,000 条短轨迹，每条 20 次状态转移；验证集 2,000 条、每类测试集 2,000 条，每条 200 次状态转移。训练集共包含 1,000,000 次状态转移，强调独立初始状态覆盖；测试集分别使用 random、sin 和 chirp 力矩信号进行较长时域评估。
+正式默认配置与原 SOARM101 数据布局对齐：训练集 50,000 条短轨迹，每条 20 次状态转移；验证集 2,000 条、每类测试集 2,000 条，每条 200 次状态转移。训练集共包含 1,000,000 次状态转移，强调独立初始状态覆盖。验证和测试的 4 s 长轨迹不再由开环力矩直接驱动，而是参考 `Adaptive-koopman-main` 的机械臂采集方法，采用“随机关节路点 → 三次样条 → 计算力矩跟踪”的闭环采集。`random`、`sin` 和 `chirp` 只表示叠加在跟踪力矩上的小幅辨识激励类型。
+
+正式采集默认参数如下：
+
+- 初始关节角从 `HOME±0.50 rad` 均匀采样，初始关节速度从 `±0.05 rad/s` 采样。
+- 每条轨迹使用 10 个路点；相邻路点由 `±0.07 rad/s` 的随机路点速度积分得到，并限制在关节安全范围内。
+- 三次样条同时生成 `q_ref`、`dq_ref` 和 `ddq_ref`。
+- 计算力矩控制采用 `Kp=16`、`Kd=8`，期望加速度逐关节限制为 `±2 rad/s²`。
+- MuJoCo 逆动力学给出目标总力矩；转换成环境动作时减去环境已有的 `0.9*tau_gravity`，再叠加辨识激励并裁剪到残差力矩限制。
+- 辨识激励最大幅值为残差力矩限制的 20%，即前三关节不超过 `±1.5 N·m`、后三关节不超过 `±0.28 N·m`。random 默认每个 0.02 s 控制步更新一次；sin/chirp 的初始频率为 0.15–0.75 Hz，chirp 在单条轨迹内额外扫频 0.9 Hz。
+- `.npy` 保存的是裁剪后实际传给环境的残差力矩，而不是未裁剪控制器输出或参考总力矩。
 
 ```powershell
 python train.py --mode collect --seed 42 --train-samples 50000 --train-steps 20 --val-samples 2000 --test-samples 2000 --test-steps 200 --force-data
 ```
+
+也可以显式覆盖采集器参数，例如：
+
+```powershell
+python train.py --mode collect --seed 42 --force-data --initial-position-span 0.50 --initial-velocity-span 0.05 --waypoint-count 10 --waypoint-velocity-limit 0.07 --tracking-kp 16 --tracking-kd 8 --tracking-acceleration-limit 2 --excitation-fraction 0.20 --random-hold-steps 1
+```
+
+数据采集算法已从旧的开环力矩改为闭环计算力矩，数据集版本为 `ur5e_computed_torque_v1`。因此此前已经生成的 `datasets/ur5e_torque/train.npy` 等文件不能继续使用；首次运行新采集器必须带 `--force-data`。如果数据没有 manifest、生成中断、参数不一致或 shape 不符，程序会明确拒绝复用，避免把新旧策略的数据混在一起。
 
 生成文件：
 
@@ -93,6 +111,8 @@ datasets/ur5e_torque/
 python -c "import numpy as np; from pathlib import Path; p=Path('datasets/ur5e_torque'); print({f.name: np.load(f).shape for f in p.glob('*.npy')})"
 Get-Content datasets/ur5e_torque/manifest.json
 ```
+
+`manifest.json` 的 `status` 必须为 `complete`，并记录每个 split 的接受率、拒绝原因、力矩饱和率、关节参考跟踪 RMSE/最大误差以及动作/状态逐维最小值和最大值。若采集中断，manifest 会保留为 `generating`，必须使用 `--force-data` 从头重建全部 split。
 
 ### 5. 训练四种 Koopman 模型
 
@@ -238,7 +258,7 @@ foreach ($seed in $seeds) {
 
 ## 数据、损失与结果说明
 
-保存的 `.npy` 每行 21 维，保持物理单位 `[u_Nm(6),p_ee_m(3),q_rad(6),dq_rad_s(6)]`；输入 DataLoader 后只对动作按额定力矩归一化。动作 `u_t` 作用于状态 `x_t` 并产生 `x_{t+1}`。训练采用原项目的多步开环形式，物理预测损失为 `L_ee + 4 L_q + L_dq`，并叠加 Koopman 潜空间一致性损失和稳定性正则项。
+保存的 `.npy` 每行 21 维，保持物理单位 `[u_Nm(6),p_ee_m(3),q_rad(6),dq_rad_s(6)]`；输入 DataLoader 后只对动作按额定力矩归一化。动作 `u_t` 是闭环控制器计算并经残差约束裁剪后的真实输入，它作用于同一行状态 `x_t` 并产生 `x_{t+1}`。参考轨迹只用于安全地生成有激励的数据，不作为网络输入。训练采用原项目的多步开环形式，物理预测损失为 `L_ee + 4 L_q + L_dq`，并叠加 Koopman 潜空间一致性损失和稳定性正则项。
 
 `--smoke` 结果、单 seed 结果和短时域 MPC 结果只用于调试。正式论文结论应来自 `plan.md` 中规定的多 seed、等训练预算、结构消融、扰动控制和不完美观测实验。
 
