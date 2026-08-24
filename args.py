@@ -27,20 +27,18 @@ class Args:
 
         parser.add_argument("--physics-timestep", type=float, default=0.002)
         parser.add_argument("--frame-skip", type=int, default=10)
-        parser.add_argument("--residual-torque-fraction", type=float, default=0.05)
-        parser.add_argument("--gravity-compensation-scale", type=float, default=0.90)
         parser.add_argument("--initial-position-span", type=float, default=0.50)
         parser.add_argument("--initial-velocity-span", type=float, default=0.05)
         parser.add_argument("--waypoint-count", type=int, default=10)
         parser.add_argument("--waypoint-velocity-limit", type=float, default=0.07)
         parser.add_argument("--tracking-kp", type=float, default=16.0)
         parser.add_argument("--tracking-kd", type=float, default=8.0)
-        parser.add_argument("--tracking-acceleration-limit", type=float, default=2.0)
+        parser.add_argument("--tracking-acceleration-limit", type=float, default=4.0)
         parser.add_argument(
             "--excitation-fraction",
             type=float,
-            default=0.20,
-            help="maximum excitation as a fraction of each residual-torque limit",
+            default=0.01,
+            help="maximum identification excitation as a fraction of rated joint torque",
         )
         parser.add_argument("--random-hold-steps", type=int, default=1)
 
@@ -97,6 +95,8 @@ class Args:
             raise ValueError("excitation_fraction must lie in [0,1]")
         if self.args.random_hold_steps < 1:
             raise ValueError("random_hold_steps must be positive")
+        if not 0.0 < self.args.torque_rate_fraction <= 1.0:
+            raise ValueError("torque_rate_fraction must lie in (0,1]")
         self.args.layers = [15, 64, 64, 32]
         self.args.x_blocks = [2, 2]
         self.args.x_channels = [12, 16]

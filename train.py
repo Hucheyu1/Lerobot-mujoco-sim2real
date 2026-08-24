@@ -13,6 +13,7 @@ from args import Args
 from models.init_model import init_model
 from models.losses import rollout_loss, rollout_prediction
 from UR5e.UR5e_DataCollection import UR5eDataGenerator
+from UR5e.artifacts import validate_model_manifest, write_model_manifest
 
 
 CORE_MODELS = ("DKUC", "DBKN", "IKN", "IBKN")
@@ -64,6 +65,7 @@ def fit_model(args: Args, data: UR5eDataGenerator, model_name: str) -> dict[str,
             if validation["rmse"] < best:
                 best = validation["rmse"]
                 torch.save(model.state_dict(), output_dir / "best_model.pt")
+                write_model_manifest(output_dir, model_name, data.env.torque_limits)
         history.append(record)
         print({"model": model_name, **record})
 
@@ -77,6 +79,7 @@ def test_model(args: Args, data: UR5eDataGenerator, model_name: str) -> dict[str
     checkpoint = Path(args.output_root) / model_name / "best_model.pt"
     if not checkpoint.exists():
         raise FileNotFoundError(f"Train {model_name} before testing: {checkpoint}")
+    validate_model_manifest(checkpoint, model_name, data.env.torque_limits)
     model.load_state_dict(torch.load(checkpoint, map_location=args.device, weights_only=True))
     test_types = tuple(data.test_data_dict) if args.test_type == "all" else (args.test_type,)
     results = {test_type: evaluate(model, data.get_test_loader(test_type)) for test_type in test_types}

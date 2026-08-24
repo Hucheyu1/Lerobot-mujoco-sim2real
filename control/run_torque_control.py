@@ -14,19 +14,21 @@ from UR5e import UR5eTorqueConfig, UR5eTorqueEnv
 def run(steps: int = 300, seed: int = 7, render: bool = False, output: Path | None = None) -> dict[str, float]:
     config = UR5eTorqueConfig(initial_position_span=0.02, initial_velocity_span=0.0)
     env = UR5eTorqueEnv(config, render_mode="human" if render else None)
-    controller = JointTorquePDController(env.residual_limits)
+    controller = JointTorquePDController(
+        env.torque_limits,
+        feedforward_torque=lambda: env.inverse_dynamics_torque(np.zeros(6)),
+    )
     trajectory = JointTrajectoryGenerator()
     state, _ = env.reset(seed=seed)
-    states, references, residuals, applied = [], [], [], []
+    states, references, joint_torques = [], [], []
     try:
         for step in range(steps):
             q_ref, dq_ref = trajectory.sample(step * config.control_timestep)
-            residual = controller.command(state, q_ref, dq_ref)
-            state, _, terminated, _, info = env.step(residual)
+            joint_torque = controller.command(state, q_ref, dq_ref)
+            state, _, terminated, _, info = env.step(joint_torque)
             states.append(state.copy())
             references.append(env.reference_state(q_ref, dq_ref))
-            residuals.append(info["residual_torque"])
-            applied.append(info["applied_torque"])
+            joint_torques.append(info["applied_joint_torque"])
             if terminated:
                 raise RuntimeError(f"Safety termination at control step {step}")
     finally:
@@ -37,8 +39,7 @@ def run(steps: int = 300, seed: int = 7, render: bool = False, output: Path | No
     q_rmse = float(np.sqrt(np.mean((state_array[:, 3:9] - reference_array[:, 3:9]) ** 2)))
     metrics = {
         "q_rmse_rad": q_rmse,
-        "max_residual_torque_nm": float(np.max(np.abs(residuals))),
-        "max_applied_torque_nm": float(np.max(np.abs(applied))),
+        "max_joint_torque_nm": float(np.max(np.abs(joint_torques))),
         "steps": steps,
     }
     if output is not None:
@@ -47,8 +48,7 @@ def run(steps: int = 300, seed: int = 7, render: bool = False, output: Path | No
             output,
             states=state_array,
             references=reference_array,
-            residual_torques=np.asarray(residuals),
-            applied_torques=np.asarray(applied),
+            joint_torques=np.asarray(joint_torques),
             metrics=metrics,
         )
     return metrics

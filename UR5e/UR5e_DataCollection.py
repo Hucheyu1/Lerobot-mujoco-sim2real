@@ -3,13 +3,13 @@
 The reference implementation in ``Adaptive-koopman-main`` generates random
 joint-space waypoints, interpolates them with a cubic spline, and follows the
 result with a computed-torque controller. This module keeps that structure
-while adapting it to the UR5e residual-torque interface: ``random``, ``sin``
-and ``chirp`` are bounded identification excitations added to the closed-loop
-tracking torque, rather than unsafe open-loop commands.
+for UR5e complete joint-torque control: ``random``, ``sin`` and ``chirp`` are
+bounded identification excitations added to the closed-loop inverse-dynamics
+torque, rather than unsafe open-loop commands.
 
-Each saved row is ``[u_t, x_t]``. Here ``u_t`` is the actual clipped
-six-dimensional residual joint torque in N m and
-``x_t=[p_ee(t), q_t, dq_t]``. Applying row ``t``'s action produces row
+Each saved row is ``[tau_t, x_t]``. Here ``tau_t`` is the actual clipped
+six-dimensional complete joint torque actually applied by the motors in N m and
+``x_t=[p_ee(t), q_t, dq_t]``. Applying row ``t``'s torque produces row
 ``t+1``'s state. Model loaders normalize action by rated joint torque; the
 ``.npy`` files retain physical units.
 """
@@ -29,8 +29,9 @@ from tqdm import tqdm
 from UR5e.UR5e_Env import UR5eTorqueConfig, UR5eTorqueEnv
 
 
-DATASET_VERSION = "ur5e_computed_torque_v1"
-COLLECTION_MODE = "computed_torque_waypoints_with_excitation"
+DATASET_VERSION = "ur5e_full_joint_torque_v1"
+COLLECTION_MODE = "computed_full_torque_waypoints_with_excitation"
+ACTION_DEFINITION = "applied_complete_joint_torque_normalized_by_rated_torque"
 
 
 class TrajectoryCollator:
@@ -44,6 +45,8 @@ class TrajectoryCollator:
 
     def __call__(self, batch_list: list[tuple[torch.Tensor]]) -> dict[str, torch.Tensor]:
         batch = torch.stack([item[0] for item in batch_list])
+        # Keep the network-facing key ``u`` for model API compatibility;
+        # physically it is the normalized complete motor torque tau/tau_rated.
         u = batch[:, :, : self.u_dim] / self.action_scale
         x = batch[:, :, self.u_dim : self.u_dim + self.x_dim]
         return {"x": x.to(self.device), "u": u.to(self.device)}
@@ -55,7 +58,7 @@ class TorqueExcitationGenerator:
     def __init__(
         self,
         signal_type: str,
-        residual_limits: np.ndarray,
+        torque_limits: np.ndarray,
         excitation_fraction: float,
         random_hold_steps: int,
         seed: int,
@@ -66,7 +69,7 @@ class TorqueExcitationGenerator:
             raise ValueError(f"Unsupported input type: {signal_type}")
         self.signal_type = signal_type
         self.rng = np.random.default_rng(seed)
-        self.max_amplitude = excitation_fraction * np.asarray(residual_limits, dtype=np.float64)
+        self.max_amplitude = excitation_fraction * np.asarray(torque_limits, dtype=np.float64)
         self.random_hold_steps = random_hold_steps
         self.control_timestep = control_timestep
         self.duration = max(total_steps * control_timestep, control_timestep)
@@ -137,8 +140,8 @@ class RandomWaypointReference:
         self.ddq = spline(sample_times, 2)
 
 
-class ComputedTorqueResidualController:
-    """Computed-torque tracking adapted to the environment's residual action."""
+class ComputedTorqueController:
+    """Generate the complete actuator torque for inverse-dynamics tracking."""
 
     def __init__(self, env: UR5eTorqueEnv, kp: float, kd: float, acceleration_limit: float):
         self.env = env
@@ -166,16 +169,14 @@ class ComputedTorqueResidualController:
             -self.acceleration_limit,
             self.acceleration_limit,
         )
-        target_total_torque = self.env.inverse_dynamics_torque(desired_acceleration)
-        gravity_feedforward = self.env.config.gravity_compensation_scale * self.env.gravity_torque()
-        raw_residual = target_total_torque - gravity_feedforward + excitation
-        clipped_residual = np.clip(
-            raw_residual,
-            -self.env.residual_limits,
-            self.env.residual_limits,
+        raw_joint_torque = self.env.inverse_dynamics_torque(desired_acceleration) + excitation
+        clipped_joint_torque = np.clip(
+            raw_joint_torque,
+            -self.env.torque_limits,
+            self.env.torque_limits,
         )
-        saturated_components = np.abs(raw_residual - clipped_residual) > 1e-10
-        return clipped_residual, saturated_components
+        saturated_components = np.abs(raw_joint_torque - clipped_joint_torque) > 1e-10
+        return clipped_joint_torque, saturated_components
 
 
 class UR5eDataGenerator:
@@ -187,13 +188,11 @@ class UR5eDataGenerator:
             xml_path=args.xml_path,
             physics_timestep=args.physics_timestep,
             frame_skip=args.frame_skip,
-            residual_torque_fraction=args.residual_torque_fraction,
-            gravity_compensation_scale=args.gravity_compensation_scale,
             initial_position_span=args.initial_position_span,
             initial_velocity_span=args.initial_velocity_span,
         )
         self.env = UR5eTorqueEnv(config)
-        self.controller = ComputedTorqueResidualController(
+        self.controller = ComputedTorqueController(
             self.env,
             kp=args.tracking_kp,
             kd=args.tracking_kd,
@@ -267,7 +266,7 @@ class UR5eDataGenerator:
                 )
                 excitation = TorqueExcitationGenerator(
                     input_type,
-                    self.env.residual_limits,
+                    self.env.torque_limits,
                     self.args.excitation_fraction,
                     self.args.random_hold_steps,
                     trajectory_seed + 2_000_000,
@@ -351,6 +350,7 @@ class UR5eDataGenerator:
         return {
             "dataset_version": DATASET_VERSION,
             "collection_mode": COLLECTION_MODE,
+            "model_action_definition": ACTION_DEFINITION,
             "train_samples": self.args.train_samples,
             "train_steps": self.args.train_steps,
             "val_samples": self.args.val_samples,
@@ -358,8 +358,6 @@ class UR5eDataGenerator:
             "test_steps": self.args.test_steps,
             "physics_timestep": self.args.physics_timestep,
             "frame_skip": self.args.frame_skip,
-            "residual_torque_fraction": self.args.residual_torque_fraction,
-            "gravity_compensation_scale": self.args.gravity_compensation_scale,
             "initial_position_span": self.args.initial_position_span,
             "initial_velocity_span": self.args.initial_velocity_span,
             "waypoint_count": self.args.waypoint_count,
@@ -379,10 +377,10 @@ class UR5eDataGenerator:
             "control_mode": "direct_joint_torque",
             "state": "[ee_xyz,q,dq]",
             "state_units": ["m"] * 3 + ["rad"] * 6 + ["rad/s"] * 6,
-            "action": "clipped_residual_joint_torque",
+            "action": "clipped_complete_joint_torque",
             "action_units": ["N m"] * 6,
             "rated_torque_nm": self.env.torque_limits.tolist(),
-            "residual_limits_nm": self.env.residual_limits.tolist(),
+            "joint_torque_limits_nm": self.env.torque_limits.tolist(),
             "control_timestep_s": self.env.config.control_timestep,
             "collection": self._collection_config(),
             "arrays": {},
@@ -405,8 +403,8 @@ class UR5eDataGenerator:
             return False
         if not manifest_path.exists():
             raise RuntimeError(
-                f"Existing arrays in {output} have no dataset manifest and may use the old "
-                "open-loop collector. Re-run with --force-data to regenerate all splits."
+                f"Existing arrays in {output} have no dataset manifest and may use an old "
+                "action definition. Re-run with --force-data to regenerate all splits."
             )
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

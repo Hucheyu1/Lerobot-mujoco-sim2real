@@ -1,4 +1,4 @@
-"""SOARM-style matrix Koopman MPC adapted to UR5e residual torque control."""
+"""SOARM-style matrix Koopman MPC for complete UR5e joint torque control."""
 
 from __future__ import annotations
 
@@ -13,8 +13,9 @@ class MPCController:
 
     As in the original controller, the bilinear term is locally frozen at the
     current lifted state, yielding ``B_total(z0)`` over the prediction horizon.
-    The revised decision variable is normalized residual torque, and both the
-    torque and torque-increment bounds are enforced inside the optimization.
+    The decision variable is normalized complete joint torque (or its
+    increment), and both torque and torque-increment bounds are enforced inside
+    the optimization. Incremental MPC is the project default.
     """
 
     def __init__(
@@ -22,7 +23,6 @@ class MPCController:
         net,
         args,
         rated_torque: np.ndarray,
-        residual_limits: np.ndarray,
         horizon: int | None = None,
     ) -> None:
         self.net = net.eval()
@@ -46,11 +46,10 @@ class MPCController:
         self.reference_dim = self.Nkoopman if self.state_full else self.x_dim
 
         rated_torque = np.asarray(rated_torque, dtype=np.float64)
-        residual_limits = np.asarray(residual_limits, dtype=np.float64)
-        if rated_torque.shape != (6,) or residual_limits.shape != (6,):
-            raise ValueError("rated_torque and residual_limits must have shape (6,)")
+        if rated_torque.shape != (6,) or np.any(rated_torque <= 0.0):
+            raise ValueError("rated_torque must be positive with shape (6,)")
         self.rated_torque = rated_torque
-        self.normalized_limit = residual_limits / rated_torque
+        self.normalized_limit = np.ones(6, dtype=np.float64)
         self.rate_limit = np.full(6, args.torque_rate_fraction, dtype=np.float64)
 
         # Preserve the previous emphasis on Cartesian tracking and joint angle.
@@ -239,6 +238,14 @@ class MPCController:
     def command(self, state: np.ndarray, reference: np.ndarray) -> np.ndarray:
         return self.get_control(state, reference)[0]
 
-    def reset(self) -> None:
-        self.u_prev.fill(0.0)
+    def reset(self, initial_torque: np.ndarray | None = None) -> None:
+        """Reset MPC memory, optionally around the current complete torque."""
+
+        if initial_torque is None:
+            self.u_prev.fill(0.0)
+        else:
+            torque = np.asarray(initial_torque, dtype=np.float64)
+            if torque.shape != (6,) or not np.all(np.isfinite(torque)):
+                raise ValueError("initial_torque must be finite with shape (6,)")
+            self.u_prev = np.clip(torque / self.rated_torque, -1.0, 1.0)
         self.warm_start.fill(0.0)

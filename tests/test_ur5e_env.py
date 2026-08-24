@@ -18,24 +18,22 @@ def test_direct_motor_dimensions_and_limits() -> None:
         assert np.all(env.model.actuator_biastype[env.actuator_ids] == mujoco.mjtBias.mjBIAS_NONE)
         assert np.all(env.model.actuator_gaintype[env.actuator_ids] == mujoco.mjtGain.mjGAIN_FIXED)
         assert np.allclose(env.torque_limits, [150, 150, 150, 28, 28, 28])
+        assert np.allclose(env.action_space.high, env.torque_limits)
     finally:
         env.close()
 
 
 def test_full_gravity_feedforward_holds_home() -> None:
-    config = UR5eTorqueConfig(
-        initial_position_span=0.0,
-        initial_velocity_span=0.0,
-        gravity_compensation_scale=1.0,
-    )
+    config = UR5eTorqueConfig(initial_position_span=0.0, initial_velocity_span=0.0)
     env = UR5eTorqueEnv(config)
     try:
         before, _ = env.reset(seed=3)
-        after, _, terminated, _, info = env.step(np.zeros(6))
+        equilibrium_torque = env.inverse_dynamics_torque(np.zeros(6))
+        after, _, terminated, _, info = env.step(equilibrium_torque)
         assert not terminated
         assert np.linalg.norm(after[3:9] - before[3:9]) < 1e-6
         assert np.linalg.norm(after[9:15]) < 1e-5
-        assert np.all(np.abs(info["applied_torque"]) <= env.torque_limits)
+        assert np.allclose(info["applied_joint_torque"], equilibrium_torque)
     finally:
         env.close()
 
@@ -56,13 +54,13 @@ def test_reference_state_contains_ee_q_dq_without_mutating_plant() -> None:
         env.close()
 
 
-def test_residual_torque_is_clipped_in_physical_units() -> None:
+def test_complete_joint_torque_is_clipped_in_physical_units() -> None:
     env = UR5eTorqueEnv()
     try:
         env.reset(seed=5)
         _, _, _, _, info = env.step(np.full(6, 1e6))
-        assert np.allclose(info["residual_torque"], env.residual_limits)
-        assert np.all(np.abs(info["applied_torque"]) <= env.torque_limits + 1e-12)
+        assert np.allclose(info["requested_joint_torque"], 1e6)
+        assert np.allclose(info["applied_joint_torque"], env.torque_limits)
         assert np.all(np.linalg.eigvalsh(env.mass_matrix()) > 0.0)
     finally:
         env.close()

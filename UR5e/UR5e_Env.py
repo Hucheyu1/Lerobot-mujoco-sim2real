@@ -1,11 +1,11 @@
-"""Gymnasium-style MuJoCo environment with direct UR5e joint torque control.
+"""Gymnasium-style MuJoCo environment with direct UR5e joint-torque control.
 
 The public state is ``x = [p_ee, q, dq]`` (15 dimensions), matching the
 end-effector-first layout of the original SOARM101 pipeline while retaining
-joint velocity for torque-dynamics Markov state.  The public action is a
-six-dimensional residual joint torque in N m.  It is added to an optional
-gravity feed-forward term and sent to six MuJoCo ``motor`` actuators.  No
-position or velocity servo is present in this control path.
+joint velocity for torque-dynamics Markov state. The public action is the
+complete six-dimensional actuator torque ``tau`` in N m. It is clipped only by
+the UR5e rated torque bounds and sent directly to six MuJoCo ``motor``
+actuators. The environment adds no hidden gravity, position, or velocity term.
 """
 
 from __future__ import annotations
@@ -31,11 +31,9 @@ class UR5eTorqueConfig:
     xml_path: str = str(DEFAULT_XML)
     physics_timestep: float = 0.002
     frame_skip: int = 10
-    residual_torque_fraction: float = 0.05
     initial_position_span: float = 0.12
     initial_velocity_span: float = 0.05
     velocity_limit: float = 4.0
-    gravity_compensation_scale: float = 0.90
 
     @property
     def control_timestep(self) -> float:
@@ -71,11 +69,6 @@ class UR5eTorqueEnv(gym.Env):
             raise FileNotFoundError(f"UR5e MJCF not found: {xml_path}")
         if self.config.frame_skip < 1 or self.config.physics_timestep <= 0:
             raise ValueError("frame_skip and physics_timestep must be positive")
-        if not 0.0 < self.config.residual_torque_fraction <= 1.0:
-            raise ValueError("residual_torque_fraction must lie in (0, 1]")
-        if not 0.0 <= self.config.gravity_compensation_scale <= 1.5:
-            raise ValueError("gravity_compensation_scale must lie in [0, 1.5]")
-
         self.model = mujoco.MjModel.from_xml_path(str(xml_path))
         self.model.opt.timestep = self.config.physics_timestep
         self.data = mujoco.MjData(self.model)
@@ -92,13 +85,10 @@ class UR5eTorqueEnv(gym.Env):
         self.torque_limits = np.max(np.abs(self.model.actuator_ctrlrange[self.actuator_ids]), axis=1)
         if not np.allclose(self.torque_limits, self.RATED_TORQUE):
             raise ValueError(f"Unexpected UR5e torque limits: {self.torque_limits}")
-        self.residual_limits = self.torque_limits * self.config.residual_torque_fraction
-
-        self.action_space = spaces.Box(-self.residual_limits, self.residual_limits, dtype=np.float64)
+        self.action_space = spaces.Box(-self.torque_limits, self.torque_limits, dtype=np.float64)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(15,), dtype=np.float64)
         self._viewer = None
-        self.last_residual_torque = np.zeros(6)
-        self.last_gravity_torque = np.zeros(6)
+        self.last_requested_joint_torque = np.zeros(6)
         self.last_applied_torque = np.zeros(6)
 
     def _id(self, object_type: mujoco.mjtObj, name: str) -> int:
@@ -178,24 +168,21 @@ class UR5eTorqueEnv(gym.Env):
         self.data.qfrc_applied[:] = 0.0
         self.data.xfrc_applied[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
-        self.last_residual_torque.fill(0.0)
-        self.last_gravity_torque.fill(0.0)
+        self.last_requested_joint_torque.fill(0.0)
         self.last_applied_torque.fill(0.0)
         return self._get_state(), self._info()
 
     def step(
         self,
-        residual_torque: np.ndarray,
+        joint_torque: np.ndarray,
         *,
         external_force: np.ndarray | None = None,
         external_joint_torque: np.ndarray | None = None,
     ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
-        residual = np.asarray(residual_torque, dtype=np.float64)
-        if residual.shape != (6,) or not np.all(np.isfinite(residual)):
-            raise ValueError("residual_torque must be finite with shape (6,)")
-        residual = np.clip(residual, -self.residual_limits, self.residual_limits)
-        gravity = self.config.gravity_compensation_scale * self.gravity_torque()
-        applied = np.clip(gravity + residual, -self.torque_limits, self.torque_limits)
+        requested = np.asarray(joint_torque, dtype=np.float64)
+        if requested.shape != (6,) or not np.all(np.isfinite(requested)):
+            raise ValueError("joint_torque must be finite with shape (6,)")
+        applied = np.clip(requested, -self.torque_limits, self.torque_limits)
 
         self.data.ctrl[self.actuator_ids] = applied
         self.data.qfrc_applied[:] = 0.0
@@ -206,16 +193,15 @@ class UR5eTorqueEnv(gym.Env):
                 raise ValueError("external_force must be finite with shape (3,)")
             self.data.xfrc_applied[self.force_body_id, :3] = force
         if external_joint_torque is not None:
-            joint_torque = np.asarray(external_joint_torque, dtype=np.float64)
-            if joint_torque.shape != (6,) or not np.all(np.isfinite(joint_torque)):
+            disturbance_torque = np.asarray(external_joint_torque, dtype=np.float64)
+            if disturbance_torque.shape != (6,) or not np.all(np.isfinite(disturbance_torque)):
                 raise ValueError("external_joint_torque must be finite with shape (6,)")
-            self.data.qfrc_applied[self.dof_ids] = joint_torque
+            self.data.qfrc_applied[self.dof_ids] = disturbance_torque
 
         for _ in range(self.config.frame_skip):
             mujoco.mj_step(self.model, self.data)
 
-        self.last_residual_torque = residual.copy()
-        self.last_gravity_torque = gravity.copy()
+        self.last_requested_joint_torque = requested.copy()
         self.last_applied_torque = applied.copy()
         state = self._get_state()
         terminated = self._unsafe(state)
@@ -234,9 +220,8 @@ class UR5eTorqueEnv(gym.Env):
 
     def _info(self) -> dict[str, Any]:
         return {
-            "residual_torque": self.last_residual_torque.copy(),
-            "gravity_torque": self.last_gravity_torque.copy(),
-            "applied_torque": self.last_applied_torque.copy(),
+            "requested_joint_torque": self.last_requested_joint_torque.copy(),
+            "applied_joint_torque": self.last_applied_torque.copy(),
             "ee_position": self.end_effector_position(),
             "control_timestep": self.config.control_timestep,
         }
