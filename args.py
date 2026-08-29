@@ -50,6 +50,12 @@ class Args:
         parser.add_argument("--pre-length", type=int, default=10)
         parser.add_argument("--loss-name", choices=["mse", "mae", "nmse"], default="mse")
         parser.add_argument("--gamma", type=float, default=0.98)
+        parser.add_argument("--state-std-floor", type=float, default=1e-6)
+        parser.add_argument("--latent-loss-weight", type=float, default=0.3)
+        parser.add_argument("--reconstruction-loss-weight", type=float, default=1.0)
+        parser.add_argument("--delta-loss-weight", type=float, default=0.0)
+        parser.add_argument("--stability-loss-weight", type=float, default=1e-3)
+        parser.add_argument("--bilinear-l1-weight", type=float, default=1e-6)
         parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
         parser.add_argument("--use-stable", action="store_true")
         parser.add_argument("--u-z", action="store_true")
@@ -97,6 +103,17 @@ class Args:
             raise ValueError("random_hold_steps must be positive")
         if not 0.0 < self.args.torque_rate_fraction <= 1.0:
             raise ValueError("torque_rate_fraction must lie in (0,1]")
+        if self.args.state_std_floor <= 0.0:
+            raise ValueError("state_std_floor must be positive")
+        loss_weights = (
+            self.args.latent_loss_weight,
+            self.args.reconstruction_loss_weight,
+            self.args.delta_loss_weight,
+            self.args.stability_loss_weight,
+            self.args.bilinear_l1_weight,
+        )
+        if any(weight < 0.0 for weight in loss_weights):
+            raise ValueError("loss weights must be non-negative")
         self.args.layers = [15, 64, 64, 32]
         self.args.x_blocks = [2, 2]
         self.args.x_channels = [12, 16]

@@ -5,7 +5,8 @@
 ## 控制语义
 
 - 机器人：MuJoCo Menagerie UR5e 简化动力学模型。
-- 状态/网络输入：`x=[p_ee,q,dq]∈R^15`，其中末端笛卡尔坐标 3 维、关节角 6 维、关节速度 6 维，单位分别为 m、rad、rad/s。前三维布局与原 SOARM101 保持一致；保留 `dq` 是因为力矩控制系统需要速度才能构成 Markov 状态。
+- 物理状态：`x=[p_ee,q,dq]∈R^15`，其中末端笛卡尔坐标 3 维、关节角 6 维、关节速度 6 维，单位分别为 m、rad、rad/s。前三维布局与原 SOARM101 保持一致；保留 `dq` 是因为力矩控制系统需要速度才能构成 Markov 状态。
+- 网络状态输入：`x_model=(x-mean_train)/std_train`。均值、标准差和一步增量标准差只由完整训练集拟合一次，验证、测试和 MPC 不得重新估计；统计量与训练数据 SHA256 同时写入数据 manifest 和 checkpoint。
 - 模型控制输入：`u≡τ_applied∈R^6`，表示六个电机实际施加的完整关节力矩，文件中单位为 N·m，进入网络后按各关节额定力矩归一化。
 - 执行器：六个 MuJoCo `motor`，额定限制为 `[150,150,150,28,28,28]` N·m。
 - 实际执行：`τ_applied=clip(τ_requested,-τ_rated,τ_rated)`。环境不再暗中叠加重力、位置或速度控制项；重力补偿必须显式包含在控制器输出的完整力矩中。
@@ -19,6 +20,8 @@
 UR5e/
   UR5e_Env.py               6 维直接力矩 Gymnasium 环境
   UR5e_DataCollection.py    闭环计算力矩轨迹采集和 DataLoader
+  normalization.py          训练集状态统计量、坐标变换和指纹校验
+  artifacts.py              checkpoint bundle 与数据/控制语义校验
 assets/ur5e/                Menagerie 来源文件和直接 motor 派生 MJCF
 models/                     DKUC、DBKN、IKN、IBKN
 control/
@@ -52,7 +55,7 @@ New-Item -ItemType Directory -Force -Path runs | Out-Null
 python -m pytest -q -p no:cacheprovider --basetemp runs/pytest_tmp
 ```
 
-测试覆盖环境状态顺序、末端坐标、逆动力学、21 维数据布局、旧数据版本隔离、长轨迹安全性、四种网络、损失权重、双线性矩阵展开、PD 和标准/增量 MPC 力矩约束。测试必须全部通过后才能开始正式数据采集。
+测试覆盖环境状态顺序、末端坐标、逆动力学、21 维数据布局、仅训练集拟合的状态标准化、统计量/checkpoint 指纹、旧数据版本隔离、长轨迹安全性、四种网络、损失权重、双线性矩阵展开、PD 和标准/增量 MPC 力矩约束。测试必须全部通过后才能开始正式数据采集。
 
 ### 3. 冒烟实验：先验证完整链路
 
@@ -91,7 +94,7 @@ python train.py --mode collect --seed 42 --train-samples 50000 --train-steps 20 
 python train.py --mode collect --seed 42 --force-data --initial-position-span 0.50 --initial-velocity-span 0.05 --waypoint-count 10 --waypoint-velocity-limit 0.07 --tracking-kp 16 --tracking-kd 8 --tracking-acceleration-limit 4 --excitation-fraction 0.01 --random-hold-steps 1
 ```
 
-数据采集算法和动作定义都已改变，新数据集版本为 `ur5e_full_joint_torque_v1`。此前使用开环力矩或残差力矩生成的 `datasets/ur5e_torque/train.npy` 等文件不能继续使用；首次运行必须带 `--force-data`。如果数据没有 manifest、生成中断、参数不一致或 shape 不符，程序会明确拒绝复用，避免混合不同输入语义的数据。
+数据采集、动作定义和状态统计量协议都已改变，新数据集版本为 `ur5e_full_joint_torque_v2`。此前的 v1、开环力矩或残差力矩 `datasets/ur5e_torque/train.npy` 等文件不能继续使用；首次运行必须带 `--force-data`。如果数据没有 manifest/normalization、生成中断、参数不一致、shape 不符或训练文件 SHA256 不一致，程序会明确拒绝复用。
 
 生成文件：
 
@@ -102,6 +105,7 @@ datasets/ur5e_torque/
   test_random.npy
   test_sin.npy
   test_chirp.npy
+  normalization.json
   manifest.json
 ```
 
@@ -112,14 +116,20 @@ python -c "import numpy as np; from pathlib import Path; p=Path('datasets/ur5e_t
 Get-Content datasets/ur5e_torque/manifest.json
 ```
 
-`manifest.json` 的 `status` 必须为 `complete`，并记录每个 split 的接受率、拒绝原因、力矩饱和率、关节参考跟踪 RMSE/最大误差以及动作/状态逐维最小值和最大值。若采集中断，manifest 会保留为 `generating`，必须使用 `--force-data` 从头重建全部 split。
+`manifest.json` 的 `status` 必须为 `complete`，并记录每个 split 的接受率、拒绝原因、力矩饱和率、关节参考跟踪 RMSE/最大误差以及动作/状态逐维最小值和最大值。`normalization.json` 记录 15 维状态的训练集 `mean/std/delta_std`、状态名称/单位、标准差下限、额定力矩、训练数组 shape、训练文件 SHA256 和统计量指纹。若采集中断，manifest 会保留为 `generating`，必须使用 `--force-data` 从头重建全部 split。
+
+可以检查标准化统计量：
+
+```powershell
+Get-Content datasets/ur5e_torque/normalization.json
+```
 
 ### 5. 训练四种 Koopman 模型
 
 四种模型使用同一数据、训练轮数、学习率、batch size、多步预测长度和随机种子：
 
 ```powershell
-python train.py --model all --mode train --seed 42 --device cuda --num-epochs 500 --lr 0.0005 --batch-size 256 --eval-batch-size 256 --pre-length 10 --gamma 0.98 --loss-name mse
+python train.py --model all --mode train --seed 42 --device cuda --num-epochs 500 --lr 0.0005 --batch-size 256 --eval-batch-size 256 --pre-length 10 --gamma 0.98 --loss-name mse --latent-loss-weight 0.3 --bilinear-l1-weight 1e-6
 ```
 
 也可以单独训练某一个模型：
@@ -134,12 +144,12 @@ python train.py --model IBKN --mode train --seed 42 --device cuda
 每个模型的结果保存在 `runs/ur5e_torque/<MODEL>/`：
 
 ```text
-best_model.pt       验证集 RMSE 最低的权重
-model_manifest.json 数据版本、完整力矩输入定义和额定力矩
+best_model.pt       权重、状态统计量、训练配置和最优验证指标的版本化 bundle
+model_manifest.json checkpoint SHA256、数据版本、状态统计量指纹和完整力矩语义
 history.json        每轮训练损失和定期验证指标
 ```
 
-测试和 Koopman MPC 都会校验 `model_manifest.json`。没有该文件或仍标记为残差力矩输入的旧 checkpoint 会被拒绝，不能因为网络张量形状相同而直接复用。
+测试和 Koopman MPC 都会交叉校验 checkpoint、`model_manifest.json` 与数据集统计量。裸 `state_dict`、没有 manifest、仍标记为残差力矩输入或携带另一训练集统计量的 checkpoint 都会被拒绝，不能因为网络张量形状相同而直接复用。
 
 不要在不同模型之间改变数据、seed、epoch 或调参预算，否则无法公平判断可逆结构和双线性结构的贡献。
 
@@ -158,7 +168,7 @@ python train.py --model IBKN --mode test --seed 42 --device cuda --test-type all
 python train.py --model IBKN --mode test --seed 42 --device cuda --test-type chirp
 ```
 
-测试结果保存在 `runs/ur5e_torque/<MODEL>/test_metrics.json`，包含总体、EE、关节角和关节速度 RMSE：
+测试结果保存在 `runs/ur5e_torque/<MODEL>/test_metrics.json`，包含物理单位的 EE/q/dq RMSE、标准化 RMSE 及用于选择 checkpoint 的无量纲分组分数：
 
 ```powershell
 Get-Content runs/ur5e_torque/IBKN/test_metrics.json
@@ -205,7 +215,7 @@ foreach ($model in $models) {
 }
 ```
 
-MPC 的输入是当前 `x_t=[p_ee,q,dq]` 和未来 `H` 步参考轨迹，输出是 6 维完整关节力矩。默认增量 MPC 优化归一化力矩增量 `Δτ_k`，递推 `τ_k=τ_(k-1)+Δτ_k`；初始 `τ_(k-1)` 由当前状态的逆动力学平衡力矩给出。程序从网络读取 `A/B/H/C`，在当前状态处冻结 `B_total(z0)=B+sum(z0_j H_j)` 后求解有限时域控制问题。
+MPC 的物理输入是当前 `x_t=[p_ee,q,dq]` 和未来 `H` 步物理参考轨迹，控制器首先使用 checkpoint 自带统计量把两者转换到同一标准化坐标，输出再由 `τ=tau_rated*u_model` 恢复为 6 维完整关节力矩。默认增量 MPC 优化归一化力矩增量，递推 `u_k=u_(k-1)+Δu_k`；初始历史力矩由当前状态的逆动力学平衡力矩给出。程序在当前状态处冻结 `B_total(z0)=B+sum(z0_j H_j)`。DKUC/DBKN 使用固定 `C` 映射到标准化状态；IKN/IBKN 在每个控制步对严格可逆解码器求 Jacobian 并在当前提升状态处线性化，使四种模型使用相同的状态跟踪代价，而不是比较不可比的潜空间欧氏距离。
 
 ### 9. 查看控制结果
 
@@ -262,7 +272,9 @@ foreach ($seed in $seeds) {
 
 ## 数据、损失与结果说明
 
-保存的 `.npy` 每行 21 维，保持物理单位 `[τ_applied_Nm(6),p_ee_m(3),q_rad(6),dq_rad_s(6)]`；输入 DataLoader 后只将完整关节力矩除以各关节额定力矩，网络接口名称 `u` 保留用于兼容，但物理含义固定为 `τ_applied/τ_rated`。力矩 `τ_t` 作用于同一行状态 `x_t` 并产生 `x_{t+1}`。参考轨迹只用于安全地生成有激励的数据，不作为网络输入。训练采用原项目的多步开环形式，物理预测损失为 `L_ee + 4 L_q + L_dq`，并叠加 Koopman 潜空间一致性损失和稳定性正则项。
+保存的 `.npy` 每行 21 维，保持物理单位 `[τ_applied_Nm(6),p_ee_m(3),q_rad(6),dq_rad_s(6)]`。DataLoader 同时返回物理坐标 `x_phys/tau_nm` 和模型坐标 `x/u`；其中 `x=(x_phys-mean_train)/std_train`，`u=tau_nm/tau_rated`。力矩 `τ_t` 作用于同一行状态 `x_t` 并产生 `x_{t+1}`。参考轨迹只用于安全地生成有激励的数据，不作为网络输入。
+
+主要训练项是在无量纲状态上的多步自由滚动损失 `L_ee+4L_q+L_dq`，并以 `0.3` 权重加入潜空间一致性；双线性模型的 `H` L1 项现在实际加入总损失，默认权重 `1e-6`。参考 Adaptive Koopman 的一步增量白化损失已实现为 `--delta-loss-weight` 消融项，但正式默认值为 `0`：当前网络直接预测绝对下一状态，而参考代码预测增量，直接默认启用会被很小的 0.02 s 状态增量异常放大。若要启用，应单独调参并报告，不得与默认实验混用。论文指标始终反标准化后分别按 m、rad、rad/s 报告。
 
 `--smoke` 结果、单 seed 结果和短时域 MPC 结果只用于调试。正式论文结论应来自 `plan.md` 中规定的多 seed、等训练预算、结构消融、扰动控制和不完美观测实验。
 

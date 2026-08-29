@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from scipy.optimize import minimize
 
+from UR5e.normalization import NormalizationStats
+
 
 class MPCController:
     """CasADi delta-MPC built from the learned Koopman ``A/B/H/C`` matrices.
@@ -23,6 +25,7 @@ class MPCController:
         net,
         args,
         rated_torque: np.ndarray,
+        normalization: NormalizationStats,
         horizon: int | None = None,
     ) -> None:
         self.net = net.eval()
@@ -42,19 +45,21 @@ class MPCController:
         self.Nkoopman = self.Ad.shape[0]
         self.H_hat_list = net.get_Hi_numpy() if hasattr(net, "H") else None
         self.C = net.lC.weight.detach().cpu().double().numpy() if hasattr(net, "lC") else None
-        self.state_full = self.C is None
-        self.reference_dim = self.Nkoopman if self.state_full else self.x_dim
+        self.reference_dim = self.x_dim
+        self.normalization = normalization
 
         rated_torque = np.asarray(rated_torque, dtype=np.float64)
         if rated_torque.shape != (6,) or np.any(rated_torque <= 0.0):
             raise ValueError("rated_torque must be positive with shape (6,)")
+        if not np.allclose(rated_torque, normalization.rated_torque_nm):
+            raise ValueError("MPC rated torque does not match checkpoint normalization")
         self.rated_torque = rated_torque
         self.normalized_limit = np.ones(6, dtype=np.float64)
         self.rate_limit = np.full(6, args.torque_rate_fraction, dtype=np.float64)
 
-        # Preserve the previous emphasis on Cartesian tracking and joint angle.
-        self.Q_physical = np.diag([50.0] * 3 + [1.0] * 6 + [1.0] * 6)
-        self.Q_lifted = 50.0 * np.eye(self.Nkoopman)
+        # All models use the same dimensionless state-coordinate cost. Cartesian
+        # tracking retains the previous MPC emphasis after per-state scaling.
+        self.Q_model = np.diag([50.0] * 3 + [1.0] * 6 + [1.0] * 6)
         self.R = 0.5 * np.eye(self.u_dim)
         self.u_prev = np.zeros(self.u_dim)
         self.warm_start = np.zeros(self.H * self.u_dim)
@@ -75,12 +80,14 @@ class MPCController:
         reference = ca.SX.sym("reference", self.H, self.reference_dim)
         z0 = ca.SX.sym("z0", self.Nkoopman)
         u_previous = ca.SX.sym("u_previous", self.u_dim)
+        output_matrix = ca.SX.sym("output_matrix", self.x_dim, self.Nkoopman)
+        output_offset = ca.SX.sym("output_offset", self.x_dim)
         b_total = self.linearize_B(z0)
         z = z0
         u = u_previous
         cost = 0
         constraints = []
-        q_matrix = ca.DM(self.Q_lifted if self.state_full else self.Q_physical)
+        q_matrix = ca.DM(self.Q_model)
         r_matrix = ca.DM(self.R)
 
         for step in range(self.H):
@@ -92,14 +99,20 @@ class MPCController:
                 delta_u = variable - u
                 u = variable
             z = ca.mtimes(ca.DM(self.Ad), z) + ca.mtimes(b_total, u)
-            prediction = z if self.state_full else ca.mtimes(ca.DM(self.C), z)
+            prediction = ca.mtimes(output_matrix, z) + output_offset
             error = prediction - reference[step, :].T
             cost += ca.mtimes([error.T, q_matrix, error])
             penalized_control = delta_u if self.MPC_type == "delta_mpc" else u
             cost += ca.mtimes([penalized_control.T, r_matrix, penalized_control])
             constraints.append(u)
 
-        parameters = ca.vertcat(ca.reshape(ca.transpose(reference), -1, 1), z0, u_previous)
+        parameters = ca.vertcat(
+            ca.reshape(ca.transpose(reference), -1, 1),
+            z0,
+            u_previous,
+            ca.reshape(output_matrix, -1, 1),
+            output_offset,
+        )
         problem = {"x": decision, "f": cost, "g": ca.vertcat(*constraints), "p": parameters}
         options = {
             "ipopt.print_level": 0,
@@ -146,11 +159,13 @@ class MPCController:
         self,
         lifted_state: np.ndarray,
         reference: np.ndarray,
+        output_matrix: np.ndarray,
+        output_offset: np.ndarray,
     ) -> np.ndarray:
         """Solve the same frozen-bilinear MPC when CasADi/Ipopt is unavailable."""
 
         b_total = self._numeric_b_total(lifted_state)
-        q_matrix = self.Q_lifted if self.state_full else self.Q_physical
+        q_matrix = self.Q_model
 
         def objective(flat: np.ndarray) -> float:
             commands, increments = self._sequence_from_decision(flat)
@@ -158,7 +173,7 @@ class MPCController:
             value = 0.0
             for step in range(self.H):
                 z = self.Ad @ z + b_total @ commands[step]
-                prediction = z if self.state_full else self.C @ z
+                prediction = output_matrix @ z + output_offset
                 error = prediction - reference[step]
                 value += float(error @ q_matrix @ error)
                 penalized = increments[step] if self.MPC_type == "delta_mpc" else commands[step]
@@ -183,7 +198,8 @@ class MPCController:
         return result.x.reshape(self.H, self.u_dim)
 
     def Psi_o(self, state: np.ndarray) -> np.ndarray:
-        tensor = torch.as_tensor(state, dtype=next(self.net.parameters()).dtype, device=self.device)
+        state_model = self.normalization.normalize_state(state)
+        tensor = torch.as_tensor(state_model, dtype=next(self.net.parameters()).dtype, device=self.device)
         if tensor.ndim == 1:
             tensor = tensor.unsqueeze(0)
         with torch.no_grad():
@@ -194,11 +210,33 @@ class MPCController:
         reference = np.asarray(reference, dtype=np.float64)
         if reference.shape != (self.H, self.x_dim):
             raise ValueError(f"reference must have shape ({self.H}, {self.x_dim})")
-        if not self.state_full:
-            return reference
-        tensor = torch.as_tensor(reference, dtype=next(self.net.parameters()).dtype, device=self.device)
-        with torch.no_grad():
-            return self.net.x_encoder(tensor).detach().cpu().double().numpy()
+        return np.asarray(self.normalization.normalize_state(reference), dtype=np.float64)
+
+    def _output_linearization(self, lifted_state: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Map lifted predictions to standardized state for a common MPC cost.
+
+        DKUC/DBKN expose the measured standardized state through a fixed C.
+        IKN/IBKN use the Jacobian of their exact inverse decoder at the current
+        lifted state, held fixed across one MPC horizon.
+        """
+
+        if self.C is not None:
+            return self.C, np.zeros(self.x_dim, dtype=np.float64)
+        dtype = next(self.net.parameters()).dtype
+        z = torch.as_tensor(lifted_state, dtype=dtype, device=self.device).requires_grad_(True)
+
+        def decode(value: torch.Tensor) -> torch.Tensor:
+            return self.net.x_decoder(value.unsqueeze(0)).squeeze(0)
+
+        with torch.enable_grad():
+            decoded = decode(z)
+            jacobian = torch.autograd.functional.jacobian(decode, z, create_graph=False)
+        matrix = jacobian.detach().cpu().double().numpy()
+        decoded_numpy = decoded.detach().cpu().double().numpy()
+        offset = decoded_numpy - matrix @ lifted_state
+        if matrix.shape != (self.x_dim, self.Nkoopman) or not np.all(np.isfinite(matrix)):
+            raise RuntimeError("Invertible decoder produced an invalid MPC output Jacobian")
+        return matrix, offset
 
     def get_control(self, state: np.ndarray, reference: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Return physical N m torque and its normalized model input."""
@@ -208,7 +246,16 @@ class MPCController:
             raise ValueError(f"state must have shape ({self.x_dim},)")
         lifted_state = self.Psi_o(state)
         prepared_reference = self._prepare_reference(reference)
-        parameters = np.concatenate((prepared_reference.reshape(-1), lifted_state, self.u_prev))
+        output_matrix, output_offset = self._output_linearization(lifted_state)
+        parameters = np.concatenate(
+            (
+                prepared_reference.reshape(-1),
+                lifted_state,
+                self.u_prev,
+                output_matrix.reshape(-1, order="F"),
+                output_offset,
+            )
+        )
         if self.MPC_type == "delta_mpc":
             lower_x = np.tile(-self.rate_limit, self.H)
             upper_x = np.tile(self.rate_limit, self.H)
@@ -216,7 +263,12 @@ class MPCController:
             lower_x = np.tile(-self.normalized_limit, self.H)
             upper_x = np.tile(self.normalized_limit, self.H)
         if self.solver is None:
-            optimized = self._solve_with_scipy(lifted_state, prepared_reference)
+            optimized = self._solve_with_scipy(
+                lifted_state,
+                prepared_reference,
+                output_matrix,
+                output_offset,
+            )
         else:
             solution = self.solver(
                 x0=self.warm_start,

@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import json
+
 import numpy as np
-import torch
 import pytest
+import torch
 
 from args import Args
 from control import JointTorquePDController, MPCController
 from control.run_torque_control import run
 from models.init_model import init_model
 from models.losses import _physical_losses, rollout_loss, rollout_prediction
+from UR5e.artifacts import (
+    load_model_checkpoint,
+    save_model_checkpoint,
+    validate_model_manifest,
+    write_model_manifest,
+)
+from UR5e.normalization import NORMALIZATION_FILE, NormalizationStats
 from UR5e.UR5e_DataCollection import UR5eDataGenerator
-from UR5e.artifacts import validate_model_manifest, write_model_manifest
 
 
 def test_formal_defaults_match_soarm_experiment_layout() -> None:
@@ -36,6 +43,10 @@ def test_formal_defaults_match_soarm_experiment_layout() -> None:
     assert args.tracking_acceleration_limit == 4.0
     assert args.excitation_fraction == 0.01
     assert args.random_hold_steps == 1
+    assert args.state_std_floor == 1e-6
+    assert args.latent_loss_weight == 0.3
+    assert args.delta_loss_weight == 0.0
+    assert args.bilinear_l1_weight == 1e-6
 
 
 def test_data_layout_and_action_normalization(tmp_path) -> None:
@@ -53,16 +64,31 @@ def test_data_layout_and_action_normalization(tmp_path) -> None:
         batch = next(iter(generator.get_train_loader()[0]))
         assert batch["x"].shape[-1] == 15
         assert batch["u"].shape[-1] == 6
+        assert batch["x_phys"].shape == batch["x"].shape
+        assert batch["tau_nm"].shape == batch["u"].shape
         assert torch.max(torch.abs(batch["u"])) <= 1.0 + 1e-6
+        assert generator.normalization is not None
+        expected_x = generator.normalization.normalize_state(batch["x_phys"])
+        expected_u = generator.normalization.normalize_torque(batch["tau_nm"])
+        assert torch.allclose(batch["x"], expected_x)
+        assert torch.allclose(batch["u"], expected_u)
+        assert (tmp_path / NORMALIZATION_FILE).is_file()
         manifest = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["status"] == "complete"
-        assert manifest["collection"]["dataset_version"] == "ur5e_full_joint_torque_v1"
+        assert manifest["collection"]["dataset_version"] == "ur5e_full_joint_torque_v2"
         assert manifest["collection"]["collection_mode"] == "computed_full_torque_waypoints_with_excitation"
         assert manifest["collection"]["model_action_definition"] == (
             "applied_complete_joint_torque_normalized_by_rated_torque"
         )
         assert manifest["action"] == "clipped_complete_joint_torque"
         assert manifest["split_statistics"]["train"]["acceptance_rate"] == 1.0
+        assert manifest["normalization"]["source_split"] == "train"
+        assert manifest["normalization"]["fingerprint"] == generator.normalization.fingerprint()
+        train_state = generator.train_data[:, :, 6:21]
+        normalized_train_state = generator.normalization.normalize_state(train_state)
+        assert np.allclose(np.mean(normalized_train_state, axis=(0, 1)), 0.0, atol=1e-7)
+        varying = np.std(train_state, axis=(0, 1)) > args.state_std_floor
+        assert np.allclose(np.std(normalized_train_state, axis=(0, 1))[varying], 1.0, atol=1e-7)
     finally:
         generator.close()
 
@@ -85,9 +111,23 @@ def test_residual_torque_checkpoint_is_not_silently_reused(tmp_path) -> None:
     rated = np.array([150.0, 150.0, 150.0, 28.0, 28.0, 28.0])
     with pytest.raises(RuntimeError, match="residual-torque"):
         validate_model_manifest(checkpoint, "IBKN", rated)
-    write_model_manifest(tmp_path, "IBKN", rated)
-    manifest = validate_model_manifest(checkpoint, "IBKN", rated)
+    args = Args(["--model", "IBKN", "--smoke", "--device", "cpu"])
+    model = init_model(args)
+    normalization = NormalizationStats.identity(rated)
+    save_model_checkpoint(checkpoint, model, "IBKN", normalization, 0, {"normalized_score": 1.0}, {})
+    write_model_manifest(tmp_path, "IBKN", rated, normalization)
+    manifest = validate_model_manifest(checkpoint, "IBKN", rated, normalization)
     assert manifest["action_definition"] == "applied_complete_joint_torque_normalized_by_rated_torque"
+    restored = init_model(args)
+    restored_normalization, _ = load_model_checkpoint(
+        checkpoint,
+        restored,
+        "IBKN",
+        rated,
+        "cpu",
+        expected_normalization=normalization,
+    )
+    assert restored_normalization.fingerprint() == normalization.fingerprint()
 
 
 def test_closed_loop_collector_keeps_long_trajectories_safe() -> None:
@@ -150,25 +190,27 @@ def test_pd_controller_returns_clipped_complete_torque() -> None:
 
 
 def test_koopman_mpc_returns_bounded_physical_torque() -> None:
-    args = Args(["--model", "IBKN", "--smoke", "--device", "cpu"])
-    args.args.mpc_horizon = 2
-    model = init_model(args).double()
     rated = np.array([150.0, 150.0, 150.0, 28.0, 28.0, 28.0])
+    normalization = NormalizationStats.identity(rated)
     state = np.zeros(15)
     reference = np.zeros((2, 15))
-    for mpc_type in ("mpc", "delta_mpc"):
-        args.args.MPC_type = mpc_type
-        controller = MPCController(model, args, rated, horizon=2)
-        if mpc_type == "delta_mpc":
-            initial_torque = rated * 0.25
-            controller.reset(initial_torque)
-        command = controller.command(state, reference)
-        assert command.shape == (6,)
-        assert np.all(np.isfinite(command))
-        assert np.all(np.abs(command) <= rated + 1e-6)
-        if mpc_type == "delta_mpc":
-            maximum_increment = rated * args.torque_rate_fraction
-            assert np.all(np.abs(command - initial_torque) <= maximum_increment + 1e-6)
+    for model_name in ("DKUC", "IBKN"):
+        args = Args(["--model", model_name, "--smoke", "--device", "cpu"])
+        args.args.mpc_horizon = 2
+        model = init_model(args).double()
+        for mpc_type in ("mpc", "delta_mpc"):
+            args.args.MPC_type = mpc_type
+            controller = MPCController(model, args, rated, normalization, horizon=2)
+            if mpc_type == "delta_mpc":
+                initial_torque = rated * 0.25
+                controller.reset(initial_torque)
+            command = controller.command(state, reference)
+            assert command.shape == (6,)
+            assert np.all(np.isfinite(command))
+            assert np.all(np.abs(command) <= rated + 1e-6)
+            if mpc_type == "delta_mpc":
+                maximum_increment = rated * args.torque_rate_fraction
+                assert np.all(np.abs(command - initial_torque) <= maximum_increment + 1e-6)
 
 
 def test_closed_loop_direct_torque_smoke(tmp_path) -> None:

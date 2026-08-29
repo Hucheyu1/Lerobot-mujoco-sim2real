@@ -7,14 +7,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from args import Args
 from control.MPC_Controler import MPCController
 from control.TrajectoryGenerator import JointTrajectoryGenerator
 from models.init_model import init_model
 from UR5e import UR5eTorqueConfig, UR5eTorqueEnv
-from UR5e.artifacts import validate_model_manifest
+from UR5e.artifacts import load_model_checkpoint
 
 
 def run(
@@ -27,10 +26,15 @@ def run(
     device: str = "cpu",
     output: Path | None = None,
 ) -> dict[str, float | str]:
-    validate_model_manifest(checkpoint, model_name, UR5eTorqueEnv.RATED_TORQUE)
     model_args = Args(["--model", model_name, "--device", device])
     model = init_model(model_args).double()
-    model.load_state_dict(torch.load(checkpoint, map_location=device, weights_only=True))
+    normalization, _ = load_model_checkpoint(
+        checkpoint,
+        model,
+        model_name,
+        UR5eTorqueEnv.RATED_TORQUE,
+        device,
+    )
     config = UR5eTorqueConfig(initial_position_span=0.02, initial_velocity_span=0.0)
     env = UR5eTorqueEnv(config)
     model_args.args.MPC_type = mpc_type
@@ -39,6 +43,7 @@ def run(
         model,
         model_args,
         env.torque_limits,
+        normalization,
         horizon=horizon,
     )
     trajectory = JointTrajectoryGenerator()

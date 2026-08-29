@@ -10,8 +10,9 @@ torque, rather than unsafe open-loop commands.
 Each saved row is ``[tau_t, x_t]``. Here ``tau_t`` is the actual clipped
 six-dimensional complete joint torque actually applied by the motors in N m and
 ``x_t=[p_ee(t), q_t, dq_t]``. Applying row ``t``'s torque produces row
-``t+1``'s state. Model loaders normalize action by rated joint torque; the
-``.npy`` files retain physical units.
+``t+1``'s state. Model loaders normalize state with statistics fitted only on
+the training split and normalize action by rated joint torque; the ``.npy``
+files retain physical units.
 """
 
 from __future__ import annotations
@@ -26,30 +27,36 @@ from scipy.interpolate import CubicSpline
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
+from UR5e.normalization import NORMALIZATION_FILE, NormalizationStats, file_sha256
 from UR5e.UR5e_Env import UR5eTorqueConfig, UR5eTorqueEnv
 
-
-DATASET_VERSION = "ur5e_full_joint_torque_v1"
+DATASET_VERSION = "ur5e_full_joint_torque_v2"
 COLLECTION_MODE = "computed_full_torque_waypoints_with_excitation"
 ACTION_DEFINITION = "applied_complete_joint_torque_normalized_by_rated_torque"
 
 
 class TrajectoryCollator:
-    """Split trajectory arrays into model state and normalized torque tensors."""
+    """Expose both physical and model coordinates from a saved trajectory."""
 
-    def __init__(self, x_dim: int, u_dim: int, action_scale: np.ndarray, device: str):
+    def __init__(self, x_dim: int, u_dim: int, normalization: NormalizationStats, device: str):
         self.x_dim = x_dim
         self.u_dim = u_dim
-        self.action_scale = torch.as_tensor(action_scale, dtype=torch.float32)
+        self.normalization = normalization
         self.device = device
 
     def __call__(self, batch_list: list[tuple[torch.Tensor]]) -> dict[str, torch.Tensor]:
         batch = torch.stack([item[0] for item in batch_list])
-        # Keep the network-facing key ``u`` for model API compatibility;
-        # physically it is the normalized complete motor torque tau/tau_rated.
-        u = batch[:, :, : self.u_dim] / self.action_scale
-        x = batch[:, :, self.u_dim : self.u_dim + self.x_dim]
-        return {"x": x.to(self.device), "u": u.to(self.device)}
+        tau_nm = batch[:, :, : self.u_dim]
+        x_phys = batch[:, :, self.u_dim : self.u_dim + self.x_dim]
+        # ``x`` and ``u`` are the only coordinates accepted by learned dynamics.
+        x = self.normalization.normalize_state(x_phys)
+        u = self.normalization.normalize_torque(tau_nm)
+        return {
+            "x": x.to(self.device),
+            "u": u.to(self.device),
+            "x_phys": x_phys.to(self.device),
+            "tau_nm": tau_nm.to(self.device),
+        }
 
 
 class TorqueExcitationGenerator:
@@ -159,11 +166,7 @@ class ComputedTorqueController:
     ) -> tuple[np.ndarray, np.ndarray]:
         q = state[3:9]
         dq = state[9:15]
-        desired_acceleration = (
-            ddq_reference
-            + self.kd * (dq_reference - dq)
-            + self.kp * (q_reference - q)
-        )
+        desired_acceleration = ddq_reference + self.kd * (dq_reference - dq) + self.kp * (q_reference - q)
         desired_acceleration = np.clip(
             desired_acceleration,
             -self.acceleration_limit,
@@ -198,16 +201,23 @@ class UR5eDataGenerator:
             kd=args.tracking_kd,
             acceleration_limit=args.tracking_acceleration_limit,
         )
-        self.collate_fn = TrajectoryCollator(
-            x_dim=args.x_dim,
-            u_dim=args.u_dim,
-            action_scale=self.env.torque_limits,
-            device=args.device,
-        )
+        self.normalization: NormalizationStats | None = None
+        self.collate_fn: TrajectoryCollator | None = None
         self.train_data: np.ndarray | None = None
         self.val_data: np.ndarray | None = None
         self.test_data_dict: dict[str, np.ndarray] = {}
         self.last_generation_stats: dict[str, Any] = {}
+
+    def _set_normalization(self, normalization: NormalizationStats) -> None:
+        if not np.allclose(normalization.rated_torque_nm, self.env.torque_limits):
+            raise RuntimeError("Normalization rated torque does not match the UR5e environment")
+        self.normalization = normalization
+        self.collate_fn = TrajectoryCollator(
+            x_dim=self.args.x_dim,
+            u_dim=self.args.u_dim,
+            normalization=normalization,
+            device=self.args.device,
+        )
 
     def _unsafe_reason(self, state: np.ndarray) -> str:
         if not np.all(np.isfinite(state)):
@@ -329,9 +339,7 @@ class UR5eDataGenerator:
             "rejected": attempts - accepted,
             "acceptance_rate": accepted / attempts,
             "saturation_rate": saturated_components / max(accepted_action_components, 1),
-            "tracking_q_rmse_rad": float(
-                np.sqrt(tracking_squared_error / max(tracking_samples, 1))
-            ),
+            "tracking_q_rmse_rad": float(np.sqrt(tracking_squared_error / max(tracking_samples, 1))),
             "tracking_q_max_abs_rad": tracking_max_abs_error,
             "rejection_counts": rejection_counts,
         }
@@ -367,6 +375,7 @@ class UR5eDataGenerator:
             "tracking_acceleration_limit": self.args.tracking_acceleration_limit,
             "excitation_fraction": self.args.excitation_fraction,
             "random_hold_steps": self.args.random_hold_steps,
+            "state_std_floor": self.args.state_std_floor,
             "seed": self.args.seed,
         }
 
@@ -385,11 +394,14 @@ class UR5eDataGenerator:
             "collection": self._collection_config(),
             "arrays": {},
             "split_statistics": {},
+            "normalization": None,
         }
 
     @staticmethod
     def _write_manifest(path: Path, manifest: dict[str, Any]) -> None:
-        path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        temporary.replace(path)
 
     def _validate_existing_data(
         self,
@@ -409,13 +421,10 @@ class UR5eDataGenerator:
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("status") != "complete":
-            raise RuntimeError(
-                f"Dataset generation in {output} is incomplete. Re-run with --force-data."
-            )
+            raise RuntimeError(f"Dataset generation in {output} is incomplete. Re-run with --force-data.")
         if manifest.get("collection") != self._collection_config():
             raise RuntimeError(
-                f"Dataset configuration in {output} does not match the current collector. "
-                "Re-run with --force-data."
+                f"Dataset configuration in {output} does not match the current collector. Re-run with --force-data."
             )
         for name, (count, steps, _, _) in specs.items():
             path = array_paths[name]
@@ -428,6 +437,31 @@ class UR5eDataGenerator:
                     f"Dataset split {path} has shape {array.shape}, expected {expected_shape}. "
                     "Re-run with --force-data."
                 )
+        normalization_path = output / NORMALIZATION_FILE
+        if not normalization_path.is_file():
+            raise RuntimeError(f"Dataset {output} has no {NORMALIZATION_FILE}. Re-run with --force-data.")
+        normalization = NormalizationStats.load(normalization_path)
+        normalization_manifest = manifest.get("normalization") or {}
+        train_digest = file_sha256(array_paths["train"])
+        expected_normalization = {
+            "file": NORMALIZATION_FILE,
+            "fingerprint": normalization.fingerprint(),
+            "source_train_sha256": train_digest,
+        }
+        mismatches = {
+            key: {"expected": value, "found": normalization_manifest.get(key)}
+            for key, value in expected_normalization.items()
+            if normalization_manifest.get(key) != value
+        }
+        if normalization.source_train_sha256 != train_digest:
+            mismatches["statistics_source_train_sha256"] = {
+                "expected": train_digest,
+                "found": normalization.source_train_sha256,
+            }
+        if mismatches:
+            raise RuntimeError(
+                f"Dataset normalization does not match train.npy: {mismatches}. Re-run with --force-data."
+            )
         return True
 
     def _array_stats(self, array: np.ndarray) -> dict[str, Any]:
@@ -449,6 +483,7 @@ class UR5eDataGenerator:
 
         if reuse_existing:
             arrays = {name: np.load(output / f"{name}.npy") for name in specs}
+            normalization = NormalizationStats.load(output / NORMALIZATION_FILE)
         else:
             manifest_path = output / "manifest.json"
             manifest = self._base_manifest(status="generating")
@@ -462,18 +497,33 @@ class UR5eDataGenerator:
                     **self._array_stats(arrays[name]),
                 }
                 self._write_manifest(manifest_path, manifest)
+            train_digest = file_sha256(output / "train.npy")
+            normalization = NormalizationStats.fit(
+                arrays["train"],
+                rated_torque_nm=self.env.torque_limits,
+                source_train_sha256=train_digest,
+                std_floor=self.args.state_std_floor,
+            )
+            normalization.save(output / NORMALIZATION_FILE)
+            manifest["normalization"] = {
+                "file": NORMALIZATION_FILE,
+                "fingerprint": normalization.fingerprint(),
+                "source_split": "train",
+                "source_train_sha256": train_digest,
+            }
             manifest["status"] = "complete"
             self._write_manifest(manifest_path, manifest)
 
+        self._set_normalization(normalization)
         self.train_data = arrays["train"]
         self.val_data = arrays["val"]
         self.test_data_dict = {
-            name.removeprefix("test_"): value
-            for name, value in arrays.items()
-            if name.startswith("test_")
+            name.removeprefix("test_"): value for name, value in arrays.items() if name.startswith("test_")
         }
 
     def _loader(self, array: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
+        if self.collate_fn is None:
+            raise RuntimeError("Normalization must be loaded before constructing data loaders")
         dataset = TensorDataset(torch.as_tensor(array, dtype=torch.float32))
         return DataLoader(
             dataset,

@@ -137,3 +137,35 @@ MPC 达到了第一关节的残差力矩上界 7.5 N·m，这是未充分训练�
 独立目录下的完整冒烟链路也已通过：采集 `8/4/4` 条短轨迹、IBKN 训练 2 epoch、random/sin/chirp 测试以及未显式指定 `--MPC-type` 的 5 步控制均成功。默认控制确认为增量 MPC，使用 SciPy/SLSQP 回退后得到 EE RMSE `0.02394 m`、关节 RMSE `0.04543 rad`、最大完整力矩 `27.7022 N·m`；相邻控制步逐关节最大力矩变化恰好不超过 `[2.25,2.25,2.25,0.42,0.42,0.42]` N·m。该模型仅训练 2 epoch，结果只证明接口和约束贯通，不用于论文性能结论。
 
 已有 checkpoint 是按残差力矩数据训练的，不能用于新的完整力矩 MPC 正式评价；必须重新采集、训练和测试后再运行 Koopman MPC。
+
+## 2026-08-29：状态标准化、checkpoint 与 MPC 坐标统一
+
+### 实现与数据版本
+
+- 新数据版本：`ur5e_full_joint_torque_v2`。
+- 状态统计量仅使用训练 split 的全部 `T+1` 状态点拟合，按固定顺序 `[ee_xyz,q,dq]` 保存逐维 `mean/std/delta_std`，标准差下限为 `1e-6`。
+- `normalization.json` 同时记录训练数组 shape、`train.npy` SHA256、额定力矩、状态名称/单位和自身指纹。验证、测试 split 不参与拟合。
+- DataLoader 返回物理坐标 `x_phys/tau_nm` 与模型坐标 `x/u`；状态采用 z-score，完整力矩继续使用 `tau/tau_rated`，不做中心化。
+- `best_model.pt` 由裸 `state_dict` 改为 schema-v2 bundle，包含权重、同一组状态统计量、统计量指纹、最优 epoch/验证指标和训练配置；旁路 manifest 再记录 checkpoint SHA256。测试和 MPC 对三者交叉校验。
+- 验证 checkpoint 的依据改为 `normalized_ee_rmse + 4*normalized_q_rmse + normalized_dq_rmse`，物理结果仍分别按 m、rad、rad/s 报告。
+- IKN/IBKN MPC 不再直接惩罚不可比的潜空间欧氏距离；每个控制步在当前提升状态处计算可逆解码器 Jacobian，冻结该输出线性化并与 DKUC/DBKN 使用同一个标准化状态代价。
+
+参考仓库的一步增量白化项已实现为可选消融，但 smoke 首次启用时总损失约为 `8048.8`，其中加权增量项约为 `8040.6`，远大于主预测损失 `7.95`。原因是参考网络直接预测增量，而本项目网络预测绝对下一状态，初始绝对误差被很小的 0.02 s 增量标准差放大。因此正式默认 `--delta-loss-weight 0`；若后续改为残差 Koopman 演化，再单独重新验证该项。
+
+### 回归与隔离 smoke
+
+- 自动化测试：`16 passed in 5.09s`。
+- 改动文件静态检查：Ruff 全部通过。
+- 隔离目录：`runs/normalization_smoke/`，没有覆盖当前正式数据目录。
+- 数据：训练 8 条、验证 4 条、三类测试各 4 条，每条 12 次状态转移。
+- 模型：IBKN，1 epoch，仅验证完整链路；统计量指纹为 `b923ea1f31eeeca279433f994b4b1361f0731d6ca863e8684e1b7a9e2d381aec`。
+- 训练总损失 `7.70154`，其中主预测损失 `7.47855`、加权潜空间损失 `0.22299`、增量项 `0`。
+- 验证物理指标：EE RMSE `0.15587 m`、q RMSE `0.32150 rad`、dq RMSE `0.07641 rad/s`；无量纲选择分数 `6.87489`。
+
+| 测试信号 | EE RMSE (m) | q RMSE (rad) | dq RMSE (rad/s) | 无量纲分组分数 |
+|---|---:|---:|---:|---:|
+| random | 0.10737 | 0.26458 | 0.08400 | 6.10799 |
+| sin | 0.15563 | 0.33386 | 0.13605 | 8.22019 |
+| chirp | 0.19823 | 0.33358 | 0.10959 | 8.41926 |
+
+随后从 schema-v2 checkpoint 独立恢复模型和统计量，运行 3 步、horizon 2 的 IBKN 增量 MPC。当前机器因 Ipopt DLL 缺失自动使用 SciPy/SLSQP；结果为 EE RMSE `0.02362 m`、q RMSE `0.03649 rad`、最大完整力矩 `23.2022 N·m`，无安全终止。该结果只证明数据—checkpoint—控制坐标链路和约束贯通，不用于论文模型性能结论。
